@@ -1,0 +1,105 @@
+name: Reusable - Pre-commit Checks
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version to use'
+        required: false
+        type: string
+        default: '3.11'
+      precommit-config-path:
+        description: 'Path to custom .pre-commit-config.yaml (relative to project root)'
+        required: false
+        type: string
+        default: ''
+      skip-precommit:
+        description: 'Skip pre-commit checks'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    name: Pre-commit Checks
+    
+    steps:
+    - name: Skip check if requested
+      if: ${{ inputs.skip-precommit }}
+      run: |
+        echo "⏭️ Pre-commit checks skipped by configuration"
+        exit 0
+    
+    - name: Checkout project code
+      if: ${{ !inputs.skip-precommit }}
+      uses: actions/checkout@v4
+    
+    - name: Checkout org pre-commit config
+      if: ${{ !inputs.skip-precommit && inputs.precommit-config-path == '' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/.github
+        path: .ci-shared
+        sparse-checkout: |
+          configs
+    
+    - name: Set up Python
+      if: ${{ !inputs.skip-precommit }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ inputs.python-version }}
+    
+    - name: Determine pre-commit config
+      if: ${{ !inputs.skip-precommit }}
+      id: config
+      run: |
+        if [ -n "${{ inputs.precommit-config-path }}" ] && [ -f "${{ inputs.precommit-config-path }}" ]; then
+          echo "Using project-specific config: ${{ inputs.precommit-config-path }}"
+          echo "config=${{ inputs.precommit-config-path }}" >> $GITHUB_OUTPUT
+        elif [ -f ".pre-commit-config.yaml" ]; then
+          echo "Using project root config"
+          echo "config=.pre-commit-config.yaml" >> $GITHUB_OUTPUT
+        else
+          echo "Using organization config"
+          cp .ci-shared/configs/.pre-commit-config.yaml .pre-commit-config.yaml
+          echo "config=.pre-commit-config.yaml" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Install pre-commit
+      if: ${{ !inputs.skip-precommit }}
+      run: |
+        python -m pip install --upgrade pip
+        pip install pre-commit
+    
+    - name: Cache pre-commit environments
+      if: ${{ !inputs.skip-precommit }}
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-${{ hashFiles('**/.pre-commit-config.yaml') }}
+        restore-keys: |
+          pre-commit-${{ runner.os }}-
+    
+    - name: Run pre-commit on all files
+      if: ${{ !inputs.skip-precommit }}
+      run: |
+        # 如果使用 org 配置，需要调整路径
+        if [ -d ".ci-shared/configs" ]; then
+          # 临时复制配置文件到当前目录
+          cp .ci-shared/configs/ruff.toml ./ruff.toml 2>/dev/null || true
+        fi
+        
+        pre-commit run --all-files --config ${{ steps.config.outputs.config }}
+    
+    - name: Run pre-commit on changed files only (fallback)
+      if: ${{ !inputs.skip-precommit && failure() }}
+      run: |
+        echo "⚠️ Full run failed, trying changed files only..."
+        
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          git fetch origin ${{ github.base_ref }}
+          pre-commit run --from-ref origin/${{ github.base_ref }} --to-ref HEAD --config ${{ steps.config.outputs.config }}
+        else
+          pre-commit run --config ${{ steps.config.outputs.config }}
+        fi

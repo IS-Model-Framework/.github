@@ -1,0 +1,70 @@
+name: Reusable - Type Check
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version to use'
+        required: false
+        type: string
+        default: '3.11'
+      install-command:
+        description: 'Command to install project dependencies'
+        required: false
+        type: string
+        default: 'pip install -e ".[dev]"'
+
+jobs:
+  type-check:
+    runs-on: ubuntu-latest
+    name: Type Check
+    
+    steps:
+    - name: Checkout project code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        repository: ${{ github.repository }}
+    
+    - name: Checkout shared CI scripts
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/.github
+        path: .ci-shared
+        sparse-checkout: |
+          scripts
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        ${{ inputs.install-command }}
+    
+    - name: Get changed Python files
+      id: py-files
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} -- "*.py" > py_files.txt
+        else
+          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            git diff --name-only ${{ github.event.before }}..${{ github.event.after }} -- "*.py" > py_files.txt
+          else
+            find . -name "*.py" -not -path "./.git/*" -not -path "./.ci-shared/*" > py_files.txt
+          fi
+        fi
+        
+        if [ -s py_files.txt ]; then
+          PYTHON_FILES=$(cat py_files.txt | tr '\n' ',' | sed 's/,$//')
+          echo "files=$PYTHON_FILES" >> $GITHUB_OUTPUT
+          echo "has_files=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_files=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Run type checking
+      if: steps.py-files.outputs.has_files == 'true'
+      run: python .ci-shared/scripts/typing_helper.py --changed-files "${{ steps.py-files.outputs.files }}"

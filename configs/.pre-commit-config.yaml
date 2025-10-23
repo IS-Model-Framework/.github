@@ -1,0 +1,51 @@
+# Organization-wide Pre-commit Configuration for Python Projects
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: detect-private-key
+      - id: requirements-txt-fixer
+      - id: check-ast
+      - id: check-toml
+      - id: check-json
+      - id: check-xml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.1
+    hooks:
+      # Ruff Linter
+      - id: ruff-check
+        name: ruff check
+        args: 
+          - --fix
+          - --config=configs/ruff.toml
+        files: \.py$
+      # Ruff Formatter
+      - id: ruff-format
+        name: ruff format
+        args:
+          - --config=configs/ruff.toml
+        files: \.py$
+  - repo: https://github.com/pycqa/isort
+    rev: 7.0.0
+    hooks:
+      - id: isort
+        name: isort (python)
+    
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+        additional_dependencies: ['tomli']
+        args: ['--toml', 'pyproject.toml', '-L', 'cann']
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v21.1.2
+    hooks:
+    - id: clang-format
+      types_or: [c++, c, cuda]

@@ -1,0 +1,51 @@
+name: Reusable - Commit Check
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version to use'
+        required: false
+        type: string
+        default: '3.11'
+
+jobs:
+  check-commit-logs:
+    runs-on: ubuntu-latest
+    name: Check Commit Messages
+    
+    steps:
+    - name: Checkout project code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        repository: ${{ github.repository }}
+    
+    - name: Checkout shared CI scripts
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/.github
+        path: .ci-shared
+        sparse-checkout: |
+          scripts
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ inputs.python-version }}
+    
+    - name: Check commit messages format
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          python .ci-shared/scripts/check_mr_logs.py \
+            --start-rev ${{ github.event.pull_request.base.sha }} \
+            --end-rev ${{ github.event.pull_request.head.sha }}
+        else
+          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            python .ci-shared/scripts/check_mr_logs.py \
+              --start-rev ${{ github.event.before }} \
+              --end-rev ${{ github.event.after }}
+          else
+            echo "Initial commit, skipping commit message check"
+          fi
+        fi
