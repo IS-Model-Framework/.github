@@ -24,6 +24,7 @@ jobs:
     uses: IS-Model-Framework/.github/.github/workflows/reusable-python-ci.yml@main
     with:
       python-version: '3.11'
+      install-command: 'pip install -e ".[dev]"'
 EOF
 
 # 3. 提交并推送
