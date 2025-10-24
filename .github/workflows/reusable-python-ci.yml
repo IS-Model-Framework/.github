@@ -47,21 +47,21 @@ on:
 jobs:
   pre-commit:
     if: ${{ !inputs.skip-precommit }}
-    uses: ./.github/workflows/reusable-precommit.yml@main
+    uses: ./.github/workflows/reusable-precommit.yml
     with:
       python-version: ${{ inputs.python-version }}
   
   commit-check:
     if: ${{ !inputs.skip-commit-check }}
     needs: pre-commit
-    uses: ./.github/workflows/reusable-commit-check.yml@main
+    uses: ./.github/workflows/reusable-commit-check.yml
     with:
       python-version: ${{ inputs.python-version }}
   
   format-check:
     if: ${{ !inputs.skip-format-check }}
     needs: pre-commit
-    uses: ./.github/workflows/reusable-format-check.yml@main
+    uses: ./.github/workflows/reusable-format-check.yml
     with:
       python-version: ${{ inputs.python-version }}
       ruff-config-path: ${{ inputs.ruff-config-path }}
@@ -70,7 +70,7 @@ jobs:
   type-check:
     if: ${{ !inputs.skip-type-check }}
     needs: pre-commit
-    uses: ./.github/workflows/reusable-type-check.yml@main
+    uses: ./.github/workflows/reusable-type-check.yml
     with:
       python-version: ${{ inputs.python-version }}
       install-command: ${{ inputs.install-command }}
