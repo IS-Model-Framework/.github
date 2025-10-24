@@ -47,7 +47,7 @@ on:
 jobs:
   pre-commit:
     if: ${{ !inputs.skip-precommit }}
-    uses: ./.github/.github/workflows/reusable-precommit.yml@main
+    uses: ./.github/workflows/reusable-precommit.yml@main
     with:
       python-version: ${{ inputs.python-version }}
   
