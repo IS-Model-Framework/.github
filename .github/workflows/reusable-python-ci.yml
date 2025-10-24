@@ -54,7 +54,7 @@ jobs:
   commit-check:
     if: ${{ !inputs.skip-commit-check }}
     needs: pre-commit
-    uses: ./.github/workflows/reusable-commit-check.yml
+    uses: ./.github/workflows/reusable-commit-check.yml@main
     with:
       python-version: ${{ inputs.python-version }}
   
