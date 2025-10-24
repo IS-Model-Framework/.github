@@ -48,10 +48,12 @@ jobs:
       id: py-files
       run: |
         if [ "${{ github.event_name }}" == "pull_request" ]; then
-          git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} -- "*.py" > py_files.txt
+          git diff --name-only --diff-filter=d \
+            ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} -- "*.py" > py_files.txt
         else
           if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            git diff --name-only ${{ github.event.before }}..${{ github.event.after }} -- "*.py" > py_files.txt
+            git diff --name-only --diff-filter=d \
+              ${{ github.event.before }}..${{ github.event.after }} -- "*.py" > py_files.txt
           else
             find . -name "*.py" -not -path "./.git/*" -not -path "./.ci-shared/*" > py_files.txt
           fi
