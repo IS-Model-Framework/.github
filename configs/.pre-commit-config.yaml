@@ -22,15 +22,11 @@ repos:
       # Ruff Linter
       - id: ruff-check
         name: ruff check
-        args: 
-          - --fix
-          - --config=configs/ruff.toml
+        args: [ --fix ]
         files: \.py$
       # Ruff Formatter
       - id: ruff-format
         name: ruff format
-        args:
-          - --config=configs/ruff.toml
         files: \.py$
   - repo: https://github.com/pycqa/isort
     rev: 7.0.0
