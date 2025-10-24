@@ -63,17 +63,19 @@ jobs:
       id: changed-files
       run: |
         if [ "${{ github.event_name }}" == "pull_request" ]; then
-          git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} > changed_files.txt
+          git diff --name-only --diff-filter=d \
+            ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} > changed_files.txt
         else
           if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            git diff --name-only ${{ github.event.before }}..${{ github.event.after }} > changed_files.txt
+            git diff --name-only --diff-filter=d \
+              ${{ github.event.before }}..${{ github.event.after }} > changed_files.txt
           else
             git ls-files > changed_files.txt
           fi
         fi
-        
+  
         if [ -s changed_files.txt ]; then
-          CHANGED_FILES=$(cat changed_files.txt | tr '\n' ',' | sed 's/,$//')
+          CHANGED_FILES=$(paste -sd, changed_files.txt)
           echo "files=$CHANGED_FILES" >> $GITHUB_OUTPUT
           echo "has_files=true" >> $GITHUB_OUTPUT
         else
