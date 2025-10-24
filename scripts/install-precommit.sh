@@ -3,7 +3,7 @@
 
 set -e
 
-echo "🔧 Installing Pre-commit Hooks for Sz-Ltc Organization"
+echo "🔧 Installing Pre-commit Hooks for IS-Model-Framework Organization"
 echo "=================================================="
 
 # Check if in a git repository
@@ -21,16 +21,16 @@ fi
 # Download organization pre-commit config if not exists
 if [ ! -f .pre-commit-config.yaml ]; then
     echo "📥 Downloading organization pre-commit config..."
-    curl -sSL https://raw.githubusercontent.com/Sz-Ltc/.github/main/configs/.pre-commit-config.yaml \
+    curl -sSL https://raw.githubusercontent.com/IS-Model-Framework/.github/main/configs/.pre-commit-config.yaml \
         -o .pre-commit-config.yaml
 else
     echo "ℹ️  Using existing .pre-commit-config.yaml"
 fi
 
 # Download ruff config if not exists
-if [ ! -f ruff.toml ] && [ ! -f pyproject.toml ]; then
+if [ ! -f ruff.toml ]; then
     echo "📥 Downloading organization ruff config..."
-    curl -sSL https://raw.githubusercontent.com/Sz-Ltc/.github/main/configs/ruff.toml \
+    curl -sSL https://raw.githubusercontent.com/IS-Model-Framework/.github/main/configs/ruff.toml \
         -o ruff.toml
 fi
 
@@ -55,4 +55,4 @@ echo "   1. Commit your changes"
 echo "   2. Pre-commit will automatically check your code before each commit"
 echo "   3. To run manually: pre-commit run --all-files"
 echo ""
-# echo "🔗 Documentation: https://github.com/Sz-Ltc/.github/blob/main/docs/PRECOMMIT_GUIDE.md"
+# echo "🔗 Documentation: https://github.com/IS-Model-Framework/.github/blob/main/docs/PRECOMMIT_GUIDE.md"
