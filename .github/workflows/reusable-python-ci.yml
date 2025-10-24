@@ -78,7 +78,7 @@ jobs:
   tests:
     if: ${{ !inputs.skip-tests }}
     needs: pre-commit
-    uses: ./.github/workflows/reusable-tests.yml@main
+    uses: ./.github/workflows/reusable-tests.yml
     with:
       python-version: ${{ inputs.python-version }}
       install-command: ${{ inputs.install-command }}
