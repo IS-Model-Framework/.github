@@ -98,6 +98,7 @@ class MypyHelper(TypingHelper):
       return True
     mypy_cmd = [
       self.mypy_path,
+      "--ignore-missing-imports",
     ]
 
     mypy_cmd += py_files
