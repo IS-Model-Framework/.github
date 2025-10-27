@@ -52,7 +52,7 @@ jobs:
         # - 生成 pytest.xml 供 PR 评论使用
         # - 生成 coverage.xml 供 Codecov 和 PR 评论使用
         #
-        pytest tests/unit/ tests/integration/ \
+        pytest \
           --cov=. \
           --cov-report=xml:coverage.xml \
           --cov-report=term-missing \
