@@ -18,6 +18,11 @@ on:
         required: false
         type: boolean
         default: true
+      comment-on-pr:
+        description: 'Post coverage comment on Pull Requests'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   comprehensive-tests:
@@ -38,19 +43,29 @@ jobs:
         python -m pip install --upgrade pip
         ${{ inputs.install-command }}
     
-    - name: Run unit tests
+    - name: Run all tests and generate reports
+      id: run-tests
       run: |
         export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-        if [ -d "tests/unit" ]; then
-          pytest tests/unit/ --cov=. --cov-report=xml --cov-report=term-missing -v
-        fi
+        # 
+        # 运行所有测试 (unit 和 integration)
+        # - 生成 pytest.xml 供 PR 评论使用
+        # - 生成 coverage.xml 供 Codecov 和 PR 评论使用
+        #
+        pytest tests/unit/ tests/integration/ \
+          --cov=. \
+          --cov-report=xml:coverage.xml \
+          --cov-report=term-missing \
+          --junitxml=pytest.xml \
+          -v -s --tb=short
     
-    - name: Run integration tests
-      run: |
-        export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-        if [ -d "tests/integration" ]; then
-          pytest tests/integration/ -v -s --tb=short || true
-        fi
+    - name: Pytest coverage comment
+      # 仅在 input 启用时，并且仅在 pull_request 事件上运行
+      if: ${{ inputs.comment-on-pr && github.event_name == 'pull_request' }}
+      uses: MishaKav/pytest-coverage-comment@main
+      with:
+        pytest-xml-coverage-path: ./coverage.xml
+        junitxml-path: ./pytest.xml
     
     - name: Upload coverage
       if: ${{ inputs.upload-coverage }}
