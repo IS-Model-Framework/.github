@@ -19,6 +19,11 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+
 jobs:
   ci:
     uses: IS-Model-Framework/.github/.github/workflows/reusable-python-ci.yml@main
