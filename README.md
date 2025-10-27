@@ -148,14 +148,17 @@ on:
     branches: [ main ]
   pull_request:
 
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+
 jobs:
   ci:
     uses: IS-Model-Framework/.github/.github/workflows/reusable-python-ci.yml@main
     with:
       python-version: '3.11'
       install-command: 'pip install -e ".[dev]"'
-    secrets:
-      ORG_CI_TOKEN: ${{ secrets.ORG_CI_TOKEN }}
 ```
 
 ### 混合项目（Python + C++）
