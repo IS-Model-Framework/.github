@@ -22,18 +22,16 @@ repos:
       # Ruff Linter
       - id: ruff-check
         name: ruff check
-        args: [ --fix ]
+        args:
+          - --fix
+          - --config=.github/workflows/ruff.toml
         files: \.py$
       # Ruff Formatter
       - id: ruff-format
         name: ruff format
+        args:
+          - --config=.github/workflows/ruff.toml
         files: \.py$
-  - repo: https://github.com/pycqa/isort
-    rev: 7.0.0
-    hooks:
-      - id: isort
-        name: isort (python)
-    
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.1
     hooks:
