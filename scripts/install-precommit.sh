@@ -27,11 +27,19 @@ else
     echo "ℹ️  Using existing .pre-commit-config.yaml"
 fi
 
-# Download ruff config if not exists
-if [ ! -f ruff.toml ]; then
-    echo "📥 Downloading organization ruff config..."
-    curl -sSL https://raw.githubusercontent.com/IS-Model-Framework/.github/main/configs/ruff.toml \
-        -o ruff.toml
+# Define ruff.toml target path
+RUFF_CONFIG_PATH=".github/workflows/ruff.toml"
+
+# Check if ruff.toml already exists
+if [ ! -f "$RUFF_CONFIG_PATH" ]; then
+    echo "📥 Downloading organization ruff config to $RUFF_CONFIG_PATH..."
+    
+    # Ensure target directory exists (.github/workflows/)
+    mkdir -p "$(dirname "$RUFF_CONFIG_PATH")"
+
+    # Download ruff.toml to the target path
+    curl -sSL https://raw.githubusercontent.com/IS-Model-Framework/.github/main/configs/ruff.toml \
+        -o "$RUFF_CONFIG_PATH"
 fi
 
 # Install pre-commit hooks
