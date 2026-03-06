@@ -23,14 +23,14 @@ jobs:
   code-format-check:
     runs-on: ubuntu-latest
     name: Code Format Check
-    
+
     steps:
     - name: Checkout project code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         repository: ${{ github.repository }}
-    
+
     - name: Checkout shared CI scripts and configs
       uses: actions/checkout@v4
       with:
@@ -39,17 +39,17 @@ jobs:
         sparse-checkout: |
           scripts
           configs
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: ${{ inputs.python-version }}
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         ${{ inputs.install-command }}
-    
+
     - name: Determine ruff config path
       id: ruff-config
       run: |
@@ -58,7 +58,7 @@ jobs:
         else
           echo "config=.ci-shared/configs/ruff.toml" >> $GITHUB_OUTPUT
         fi
-    
+
     - name: Get changed files
       id: changed-files
       run: |
@@ -85,18 +85,24 @@ jobs:
     - name: Run code format check
       if: steps.changed-files.outputs.has_files == 'true'
       run: |
+        FINAL_CONFIG="${{ steps.ruff-config.outputs.config }}"
+        FILES_STR="${{ steps.changed-files.outputs.files }}"
+        DETECTED_RUFF=$(echo "$FILES_STR" | tr ',' '\n' | grep 'ruff.toml' | head -n 1)
+        if [ -n "$DETECTED_RUFF" ]; then
+          FINAL_CONFIG="$DETECTED_RUFF"
+        fi
         if [ "${{ github.event_name }}" == "pull_request" ]; then
           python .ci-shared/scripts/code_format_helper.py \
             --start-rev ${{ github.event.pull_request.base.sha }} \
             --end-rev ${{ github.event.pull_request.head.sha }} \
             --changed-files "${{ steps.changed-files.outputs.files }}" \
-            --py-style-config ${{ steps.ruff-config.outputs.config }}
+            --py-style-config "$FINAL_CONFIG"
         else
           if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
             python .ci-shared/scripts/code_format_helper.py \
               --start-rev ${{ github.event.before }} \
               --end-rev ${{ github.event.after }} \
               --changed-files "${{ steps.changed-files.outputs.files }}" \
-              --py-style-config ${{ steps.ruff-config.outputs.config }}
+              --py-style-config "$FINAL_CONFIG"
           fi
         fi

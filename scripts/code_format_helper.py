@@ -211,6 +211,7 @@ class RuffFormatHelper(FormatHelper):
     ]
     if args.py_style_config:
       ruff_cmd += ["--config", args.py_style_config]
+    ruff_cmd.append("--force-exclude")
     ruff_cmd.append("--")
     ruff_cmd += py_files
     if args.verbose:
