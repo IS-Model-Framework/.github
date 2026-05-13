@@ -27,8 +27,8 @@ LOCK_FILE_NAMES = {
   "pnpm-lock.yaml",
   "yarn.lock",
   "poetry.lock",
-  "Pipfile.lock",
-  "Cargo.lock",
+  "pipfile.lock",
+  "cargo.lock",
 }
 
 EXCLUDED_DIRS = {
@@ -82,14 +82,17 @@ class FileChange:
 
 
 def normalize_path(path: str) -> str:
-  return path.strip().replace("\\", "/")
+  path = path.strip()
+  if path.startswith('"') and path.endswith('"'):
+    path = path[1:-1]
+  return path.replace("\\", "/")
 
 
 def is_excluded_file(path: str) -> Tuple[bool, str]:
-  normalized_path = normalize_path(path)
+  normalized_path = normalize_path(path).lower()
   parts = [part for part in normalized_path.split("/") if part]
   basename = parts[-1] if parts else normalized_path
-  _, extension = os.path.splitext(basename.lower())
+  _, extension = os.path.splitext(basename)
 
   if basename in LOCK_FILE_NAMES:
     return True, "lock file"
@@ -111,13 +114,13 @@ def is_excluded_file(path: str) -> Tuple[bool, str]:
 def get_git_numstat(start_rev: str, end_rev: str) -> str:
   try:
     result = subprocess.run(
-      ["git", "diff", "--numstat", f"{start_rev}..{end_rev}"],
+      ["git", "diff", "--numstat", f"{start_rev}...{end_rev}"],
       capture_output=True,
       text=True,
       check=True,
     )
   except subprocess.SubprocessError as error:
-    print(f"Error getting git diff stats: {error}")
+    print(f"Error getting git diff stats: {error}", file=sys.stderr)
     sys.exit(2)
 
   return result.stdout
@@ -219,7 +222,8 @@ def check_pr_size(
   block_threshold: int,
 ) -> bool:
   if warning_threshold >= block_threshold:
-    print("Error: warning threshold must be lower than blocking threshold")
+    print("Error: warning threshold must be lower than blocking threshold",
+          file=sys.stderr)
     sys.exit(2)
 
   file_changes = parse_numstat(get_git_numstat(start_rev, end_rev))
