@@ -42,9 +42,32 @@ on:
         description: 'Skip pre-commit checks'
         required: false
         type: boolean
-        default: false  
+        default: false
+      skip-pr-size-check:
+        description: 'Skip pull request size check'
+        required: false
+        type: boolean
+        default: false
+      pr-size-warning-threshold:
+        description: 'Warn when counted added lines are greater than this value'
+        required: false
+        type: number
+        default: 300
+      pr-size-block-threshold:
+        description: 'Fail when counted added lines are greater than this value'
+        required: false
+        type: number
+        default: 500
 
 jobs:
+  pr-size-check:
+    if: ${{ !inputs.skip-pr-size-check }}
+    uses: ./.github/workflows/reusable-pr-size-check.yml
+    with:
+      python-version: ${{ inputs.python-version }}
+      warning-threshold: ${{ inputs.pr-size-warning-threshold }}
+      block-threshold: ${{ inputs.pr-size-block-threshold }}
+
   pre-commit:
     if: ${{ !inputs.skip-precommit }}
     uses: ./.github/workflows/reusable-precommit.yml
