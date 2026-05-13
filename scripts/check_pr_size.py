@@ -89,7 +89,7 @@ def normalize_path(path: str) -> str:
 
 
 def is_excluded_file(path: str) -> Tuple[bool, str]:
-  normalized_path = normalize_path(path).lower()
+  normalized_path = path.lower()
   parts = [part for part in normalized_path.split("/") if part]
   basename = parts[-1] if parts else normalized_path
   _, extension = os.path.splitext(basename)
