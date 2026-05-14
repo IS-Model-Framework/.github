@@ -52,6 +52,7 @@ git push
 | `reusable-format-check.yml` | 代码格式检查        | Python 项目            |
 | `reusable-type-check.yml`   | 类型检查            | 使用类型注解的项目     |
 | `reusable-tests.yml`        | 测试运行            | 有测试的项目           |
+| `reusable-pr-size-check.yml` | PR 新增行数限制     | 控制 PR review 规模    |
 
 ### Pre-commit Configuration
 
@@ -80,6 +81,7 @@ git push
 | ----------------------- | ---------------------------------------- |
 | `check_mr_logs.py`      | 验证提交信息格式（Conventional Commits） |
 | `code_format_helper.py` | 代码格式辅助检查                         |
+| `check_pr_size.py`      | 检查 PR 新增行数并在过大时 warning/block |
 | `typing_helper.py`      | Python 类型注解检查                      |
 
 ### Shared Configs

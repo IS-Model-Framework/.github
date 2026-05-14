@@ -1,0 +1,62 @@
+name: Reusable - PR Size Check
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version to use'
+        required: false
+        type: string
+        default: '3.11'
+      warning-threshold:
+        description: 'Warn when counted added lines are greater than this value'
+        required: false
+        type: number
+        default: 300
+      block-threshold:
+        description: 'Fail when counted added lines are greater than this value'
+        required: false
+        type: number
+        default: 500
+
+jobs:
+  pr-size-check:
+    runs-on: ubuntu-latest
+    name: PR Size Check
+
+    steps:
+    - name: Skip check outside pull requests
+      if: ${{ github.event_name != 'pull_request' }}
+      run: |
+        echo "PR size check only runs for pull_request events"
+
+    - name: Checkout project code
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        repository: ${{ github.repository }}
+
+    - name: Checkout shared CI scripts
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/.github
+        path: .ci-shared
+        sparse-checkout: |
+          scripts
+
+    - name: Set up Python
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Check PR added lines
+      if: ${{ github.event_name == 'pull_request' }}
+      run: |
+        python .ci-shared/scripts/check_pr_size.py \
+          --start-rev ${{ github.event.pull_request.base.sha }} \
+          --end-rev ${{ github.event.pull_request.head.sha }} \
+          --warning-threshold ${{ inputs.warning-threshold }} \
+          --block-threshold ${{ inputs.block-threshold }}
