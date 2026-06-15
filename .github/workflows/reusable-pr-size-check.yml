@@ -36,6 +36,7 @@ jobs:
       with:
         fetch-depth: 0
         repository: ${{ github.repository }}
+        submodules: recursive
 
     - name: Checkout shared CI scripts
       if: ${{ github.event_name == 'pull_request' }}

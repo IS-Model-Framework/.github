@@ -30,6 +30,7 @@ jobs:
       with:
         fetch-depth: 0
         repository: ${{ github.repository }}
+        submodules: recursive
 
     - name: Checkout shared CI scripts and configs
       uses: actions/checkout@v4
