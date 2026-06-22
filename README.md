@@ -79,7 +79,7 @@ git push
 
 | 脚本                    | 功能                                     |
 | ----------------------- | ---------------------------------------- |
-| `check_mr_logs.py`      | 验证提交信息格式（Conventional Commits） |
+| `check_mr_logs.py`      | 验证最新提交信息格式（Conventional Commits） |
 | `code_format_helper.py` | 代码格式辅助检查                         |
 | `check_pr_size.py`      | 检查 PR 新增行数并在过大时 warning/block |
 | `typing_helper.py`      | Python 类型注解检查                      |
