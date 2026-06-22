@@ -157,7 +157,7 @@ def validate_commit(commit_msg):
   return True, []
 
 
-def check_mr_logs(start_rev, end_rev):
+def check_mr_logs(_start_rev, end_rev):
   commit_hash = end_rev
 
   commit_msg = get_commit_log(commit_hash)
