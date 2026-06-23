@@ -10,33 +10,17 @@ import argparse
 import subprocess
 
 """
-Check if all git log messages in a MR match the specified template.
+Check if the latest git commit message in a MR matches the specified template.
 Link to template: https://alidocs.dingtalk.com/i/nodes/y20BglGWO27abk2lTl1v3odb8A7depqY?utm_scene=team_space
 
 Usage:
-    python check_pr_logs.py <start_rev> <end_rev>
+    python check_mr_logs.py --start-rev <start_rev> --end-rev <end_rev>
 
 Exit codes:
-    0 - All commit messages match the template
-    1 - At least one commit message doesn't match the template
+    0 - Latest commit message matches the template
+    1 - Latest commit message doesn't match the template
     2 - Error occurred during execution
 """
-
-
-def get_git_commits(start_rev, end_rev):
-  try:
-    # Get all commit hashes
-    result = subprocess.run(
-      ["git", "log", "--pretty=format:%H", f"{start_rev}..{end_rev}"],
-      capture_output=True,
-      text=True,
-      check=True,
-    )
-    commit_hashes = result.stdout.strip().split("\n")
-    return commit_hashes
-  except subprocess.SubprocessError as e:
-    print(f"Error getting commit history: {e}")
-    sys.exit(2)
 
 
 def get_commit_log(commit_hash):
@@ -173,27 +157,22 @@ def validate_commit(commit_msg):
   return True, []
 
 
-def check_mr_logs(start_rev, end_rev):
-  commit_hashes = get_git_commits(start_rev, end_rev)
-  error_commits = []
+def check_mr_logs(_start_rev, end_rev):
+  commit_hash = end_rev
 
-  for commit_hash in commit_hashes:
-    commit_msg = get_commit_log(commit_hash)
-    if not commit_msg:
-      print(f"Could not get log for commit {commit_hash}")
-      return False
-
-    is_valid, error_msgs = validate_commit(commit_msg)
-    if not is_valid:
-      error_commits.extend([(commit_hash, error_msg) for error_msg in error_msgs])
-
-  if error_commits:
-    print(f"Found {len(error_commits)} commits that don't match the template:")
-    for commit_hash, error_msg in error_commits:
-      print(f"- Commit {commit_hash}: {error_msg}")
+  commit_msg = get_commit_log(commit_hash)
+  if not commit_msg:
+    print(f"Could not get log for commit {commit_hash}")
     return False
 
-  print("All commits match the template!")
+  is_valid, error_msgs = validate_commit(commit_msg)
+  if not is_valid:
+    print(f"Latest commit {commit_hash} doesn't match the template:")
+    for error_msg in error_msgs:
+      print(f"- {error_msg}")
+    return False
+
+  print("Latest commit matches the template!")
   return True
 
 

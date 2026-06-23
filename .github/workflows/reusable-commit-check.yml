@@ -12,7 +12,7 @@ on:
 jobs:
   check-commit-logs:
     runs-on: ubuntu-latest
-    name: Check Commit Messages
+    name: Check Latest Commit Message
     
     steps:
     - name: Checkout project code
@@ -35,18 +35,14 @@ jobs:
       with:
         python-version: ${{ inputs.python-version }}
     
-    - name: Check commit messages format
+    - name: Check latest commit message format
       run: |
         if [ "${{ github.event_name }}" == "pull_request" ]; then
           python .ci-shared/scripts/check_mr_logs.py \
             --start-rev ${{ github.event.pull_request.base.sha }} \
             --end-rev ${{ github.event.pull_request.head.sha }}
         else
-          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            python .ci-shared/scripts/check_mr_logs.py \
-              --start-rev ${{ github.event.before }} \
-              --end-rev ${{ github.event.after }}
-          else
-            echo "Initial commit, skipping commit message check"
-          fi
+          python .ci-shared/scripts/check_mr_logs.py \
+            --start-rev ${{ github.event.before }} \
+            --end-rev ${{ github.event.after }}
         fi
