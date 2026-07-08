@@ -55,10 +55,12 @@ jobs:
         TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
       run: |
         if [ -z "$TOKEN" ]; then
+          echo "::warning::PALLAS_KERNELS_READ_TOKEN is not available; private GitHub release assets may fail to download."
           exit 0
         fi
         printf "machine github.com\nlogin x-access-token\npassword %s\n" "$TOKEN" > ~/.netrc
         chmod 600 ~/.netrc
+        echo "Configured GitHub release asset auth."
 
     - name: Install dependencies
       run: |
