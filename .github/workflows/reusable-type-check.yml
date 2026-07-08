@@ -13,6 +13,9 @@ on:
         required: false
         type: string
         default: 'pip install -e ".[dev]"'
+    secrets:
+      PALLAS_KERNELS_READ_TOKEN:
+        required: false
 
 jobs:
   type-check:
@@ -39,6 +42,17 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: ${{ inputs.python-version }}
+
+    - name: Configure GitHub release asset auth
+      shell: bash
+      env:
+        TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
+      run: |
+        if [ -z "$TOKEN" ]; then
+          exit 0
+        fi
+        printf "machine github.com\nlogin x-access-token\npassword %s\n" "$TOKEN" > ~/.netrc
+        chmod 600 ~/.netrc
 
     - name: Install dependencies
       run: |

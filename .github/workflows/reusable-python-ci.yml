@@ -58,6 +58,9 @@ on:
         required: false
         type: number
         default: 500
+    secrets:
+      PALLAS_KERNELS_READ_TOKEN:
+        required: false
 
 jobs:
   pr-size-check:
@@ -89,6 +92,8 @@ jobs:
       python-version: ${{ inputs.python-version }}
       ruff-config-path: ${{ inputs.ruff-config-path }}
       install-command: ${{ inputs.install-command }}
+    secrets:
+      PALLAS_KERNELS_READ_TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
   
   type-check:
     if: ${{ !inputs.skip-type-check }}
@@ -97,6 +102,8 @@ jobs:
     with:
       python-version: ${{ inputs.python-version }}
       install-command: ${{ inputs.install-command }}
+    secrets:
+      PALLAS_KERNELS_READ_TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
   
   tests:
     if: ${{ !inputs.skip-tests }}
@@ -105,3 +112,5 @@ jobs:
     with:
       python-version: ${{ inputs.python-version }}
       install-command: ${{ inputs.install-command }}
+    secrets:
+      PALLAS_KERNELS_READ_TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
