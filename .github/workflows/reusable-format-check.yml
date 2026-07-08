@@ -62,6 +62,15 @@ jobs:
         chmod 600 ~/.netrc
         echo "Configured GitHub release asset auth."
 
+    - name: Verify PallasKernels release asset auth
+      shell: bash
+      env:
+        TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
+      run: |
+        curl -fsSIL \
+          -H "Authorization: Bearer $TOKEN" \
+          https://github.com/IS-Model-Framework/PallasKernels/releases/download/v0.2.0/pallas_kernels_proton_samples-0.2.0-py3-none-any.whl
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
