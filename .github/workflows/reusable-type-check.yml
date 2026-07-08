@@ -14,7 +14,7 @@ on:
         type: string
         default: 'pip install -e ".[dev]"'
     secrets:
-      PALLAS_KERNELS_READ_TOKEN:
+      PRIVATE_RELEASE_ASSET_READ_TOKEN:
         required: false
 
 jobs:
@@ -43,20 +43,9 @@ jobs:
       with:
         python-version: ${{ inputs.python-version }}
 
-    - name: Configure GitHub release asset auth
-      shell: bash
-      env:
-        TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
-      run: |
-        if [ -z "$TOKEN" ]; then
-          echo "::warning::PALLAS_KERNELS_READ_TOKEN is not available; private GitHub release assets may fail to download."
-          exit 0
-        fi
-        printf "machine github.com\nlogin x-access-token\npassword %s\n" "$TOKEN" > ~/.netrc
-        chmod 600 ~/.netrc
-        echo "Configured GitHub release asset auth."
-
     - name: Install dependencies
+      env:
+        GH_TOKEN: ${{ secrets.PRIVATE_RELEASE_ASSET_READ_TOKEN }}
       run: |
         python -m pip install --upgrade pip
         ${{ inputs.install-command }}

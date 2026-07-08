@@ -59,7 +59,7 @@ on:
         type: number
         default: 500
     secrets:
-      PALLAS_KERNELS_READ_TOKEN:
+      PRIVATE_RELEASE_ASSET_READ_TOKEN:
         required: false
 
 jobs:
@@ -93,7 +93,7 @@ jobs:
       ruff-config-path: ${{ inputs.ruff-config-path }}
       install-command: ${{ inputs.install-command }}
     secrets:
-      PALLAS_KERNELS_READ_TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
+      PRIVATE_RELEASE_ASSET_READ_TOKEN: ${{ secrets.PRIVATE_RELEASE_ASSET_READ_TOKEN }}
   
   type-check:
     if: ${{ !inputs.skip-type-check }}
@@ -103,7 +103,7 @@ jobs:
       python-version: ${{ inputs.python-version }}
       install-command: ${{ inputs.install-command }}
     secrets:
-      PALLAS_KERNELS_READ_TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
+      PRIVATE_RELEASE_ASSET_READ_TOKEN: ${{ secrets.PRIVATE_RELEASE_ASSET_READ_TOKEN }}
   
   tests:
     if: ${{ !inputs.skip-tests }}
@@ -113,4 +113,4 @@ jobs:
       python-version: ${{ inputs.python-version }}
       install-command: ${{ inputs.install-command }}
     secrets:
-      PALLAS_KERNELS_READ_TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
+      PRIVATE_RELEASE_ASSET_READ_TOKEN: ${{ secrets.PRIVATE_RELEASE_ASSET_READ_TOKEN }}
