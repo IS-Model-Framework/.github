@@ -54,6 +54,26 @@ git push
 | `reusable-tests.yml`        | 测试运行            | 有测试的项目           |
 | `reusable-pr-size-check.yml` | PR 新增行数限制     | 控制 PR review 规模    |
 
+### 私有 Release wheel 依赖
+
+如果项目的 `pyproject.toml` 依赖 IS-Model-Framework 私有 GitHub Release
+wheel，可以启用公共 materializer：
+
+```yaml
+jobs:
+  ci:
+    uses: IS-Model-Framework/.github/.github/workflows/reusable-python-ci.yml@main
+    with:
+      install-command: 'pip install -e ".[dev]"'
+      materialize-private-release-wheels: true
+    secrets:
+      PRIVATE_RELEASE_ASSET_READ_TOKEN: ${{ secrets.PALLAS_KERNELS_READ_TOKEN }}
+```
+
+调用方需要为 reusable workflow 提供只读 Release asset token。开启后，format、type-check
+和 tests job 会在安装项目依赖前运行
+`.ci-shared/scripts/materialize_private_release_wheels.py`；未开启时不会改变原有安装流程。
+
 ### Pre-commit Configuration
 
 组织标准的 pre-commit hooks，确保代码提交前的质量：

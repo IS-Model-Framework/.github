@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: 'pip install -e ".[dev]"'
+      materialize-private-release-wheels:
+        description: 'Download private GitHub Release wheels before dependency installation'
+        required: false
+        type: boolean
+        default: false
       skip-commit-check:
         description: 'Skip commit message check'
         required: false
@@ -92,6 +97,7 @@ jobs:
       python-version: ${{ inputs.python-version }}
       ruff-config-path: ${{ inputs.ruff-config-path }}
       install-command: ${{ inputs.install-command }}
+      materialize-private-release-wheels: ${{ inputs.materialize-private-release-wheels }}
     secrets:
       PRIVATE_RELEASE_ASSET_READ_TOKEN: ${{ secrets.PRIVATE_RELEASE_ASSET_READ_TOKEN }}
   
@@ -102,6 +108,7 @@ jobs:
     with:
       python-version: ${{ inputs.python-version }}
       install-command: ${{ inputs.install-command }}
+      materialize-private-release-wheels: ${{ inputs.materialize-private-release-wheels }}
     secrets:
       PRIVATE_RELEASE_ASSET_READ_TOKEN: ${{ secrets.PRIVATE_RELEASE_ASSET_READ_TOKEN }}
   
@@ -112,5 +119,6 @@ jobs:
     with:
       python-version: ${{ inputs.python-version }}
       install-command: ${{ inputs.install-command }}
+      materialize-private-release-wheels: ${{ inputs.materialize-private-release-wheels }}
     secrets:
       PRIVATE_RELEASE_ASSET_READ_TOKEN: ${{ secrets.PRIVATE_RELEASE_ASSET_READ_TOKEN }}
