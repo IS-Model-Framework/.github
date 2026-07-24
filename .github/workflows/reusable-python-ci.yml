@@ -1,6 +1,7 @@
 name: Reusable - Complete Python CI
 
 on:
+  pull_request:
   workflow_call:
     inputs:
       python-version:
@@ -64,44 +65,44 @@ jobs:
     if: ${{ !inputs.skip-pr-size-check }}
     uses: ./.github/workflows/reusable-pr-size-check.yml
     with:
-      python-version: ${{ inputs.python-version }}
-      warning-threshold: ${{ inputs.pr-size-warning-threshold }}
-      block-threshold: ${{ inputs.pr-size-block-threshold }}
+      python-version: ${{ inputs.python-version || '3.11' }}
+      warning-threshold: ${{ inputs.pr-size-warning-threshold || 300 }}
+      block-threshold: ${{ inputs.pr-size-block-threshold || 500 }}
 
   pre-commit:
     if: ${{ !inputs.skip-precommit }}
     uses: ./.github/workflows/reusable-precommit.yml
     with:
-      python-version: ${{ inputs.python-version }}
+      python-version: ${{ inputs.python-version || '3.11' }}
   
   commit-check:
     if: ${{ !inputs.skip-commit-check }}
     needs: pre-commit
     uses: ./.github/workflows/reusable-commit-check.yml
     with:
-      python-version: ${{ inputs.python-version }}
+      python-version: ${{ inputs.python-version || '3.11' }}
   
   format-check:
     if: ${{ !inputs.skip-format-check }}
     needs: pre-commit
     uses: ./.github/workflows/reusable-format-check.yml
     with:
-      python-version: ${{ inputs.python-version }}
+      python-version: ${{ inputs.python-version || '3.11' }}
       ruff-config-path: ${{ inputs.ruff-config-path }}
-      install-command: ${{ inputs.install-command }}
+      install-command: ${{ inputs.install-command || 'pip install -e ".[dev]"' }}
   
   type-check:
     if: ${{ !inputs.skip-type-check }}
     needs: pre-commit
     uses: ./.github/workflows/reusable-type-check.yml
     with:
-      python-version: ${{ inputs.python-version }}
-      install-command: ${{ inputs.install-command }}
+      python-version: ${{ inputs.python-version || '3.11' }}
+      install-command: ${{ inputs.install-command || 'pip install -e ".[dev]"' }}
   
   tests:
     if: ${{ !inputs.skip-tests }}
     needs: pre-commit
     uses: ./.github/workflows/reusable-tests.yml
     with:
-      python-version: ${{ inputs.python-version }}
-      install-command: ${{ inputs.install-command }}
+      python-version: ${{ inputs.python-version || '3.11' }}
+      install-command: ${{ inputs.install-command || 'pip install -e ".[dev]"' }}
