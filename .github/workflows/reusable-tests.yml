@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: true
+      file-coverage-threshold:
+        description: 'Minimum coverage percentage required for each measured file'
+        required: false
+        type: number
+        default: 85
 
 jobs:
   comprehensive-tests:
@@ -32,6 +37,15 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Checkout shared CI scripts
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/.github
+        path: .ci-shared
+        sparse-checkout: |
+          scripts
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -73,3 +87,10 @@ jobs:
       with:
         file: ./coverage.xml
         fail_ci_if_error: false
+
+    - name: Check per-file coverage threshold
+      if: ${{ github.event_name == 'pull_request' }}
+      run: |
+        python .ci-shared/scripts/check_file_coverage.py \
+          --coverage-file coverage.xml \
+          --threshold ${{ inputs.file-coverage-threshold }}
