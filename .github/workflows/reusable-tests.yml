@@ -33,6 +33,8 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
+        fetch-depth: 0
+        repository: ${{ github.repository }}
         submodules: recursive
     
     - name: Set up Python
