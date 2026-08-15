@@ -1,7 +1,6 @@
 name: Reusable - Complete Python CI
 
 on:
-  pull_request:
   workflow_call:
     inputs:
       python-version:
