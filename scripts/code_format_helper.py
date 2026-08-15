@@ -36,7 +36,7 @@ class FormatArgs:
   verbose: bool = True
 
   def __init__(self, args: Optional[argparse.Namespace] = None) -> None:
-    if not args is None:
+    if args is not None:
       self.start_rev = args.start_rev
       self.end_rev = args.end_rev
       self.changed_files = args.changed_files

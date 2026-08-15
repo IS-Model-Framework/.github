@@ -1,7 +1,6 @@
 name: Reusable - Complete Python CI
 
 on:
-  pull_request:
   workflow_call:
     inputs:
       python-version:
@@ -19,6 +18,11 @@ on:
         required: false
         type: string
         default: 'pip install -e ".[dev]"'
+      test-install-command:
+        description: 'Command to install project dependencies for tests'
+        required: false
+        type: string
+        default: ''
       skip-commit-check:
         description: 'Skip commit message check'
         required: false
@@ -59,6 +63,9 @@ on:
         required: false
         type: number
         default: 500
+    secrets:
+      proton_samples_token:
+        required: false
 
 jobs:
   pr-size-check:
@@ -105,4 +112,6 @@ jobs:
     uses: ./.github/workflows/reusable-tests.yml
     with:
       python-version: ${{ inputs.python-version || '3.11' }}
-      install-command: ${{ inputs.install-command || 'pip install -e ".[dev]"' }}
+      install-command: ${{ inputs.test-install-command || inputs.install-command || 'pip install -e ".[dev]"' }}
+    secrets:
+      proton_samples_token: ${{ secrets.proton_samples_token }}

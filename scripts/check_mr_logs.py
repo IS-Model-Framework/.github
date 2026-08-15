@@ -26,7 +26,7 @@ Exit codes:
 def get_commit_log(commit_hash):
   try:
     result = subprocess.run(
-      ["git", "show", "-s", f"--format=%B%nAuthor: %an <%ae>", commit_hash],
+      ["git", "show", "-s", "--format=%B%nAuthor: %an <%ae>", commit_hash],
       capture_output=True,
       text=True,
       check=True,
@@ -49,7 +49,7 @@ def check_header(commit_msg):
   if not header_match:
     return (
       False,
-      f"Invalid header format. Should be: <type>[<SCOPE>]: <short-summary>",
+      "Invalid header format. Should be: <type>[<SCOPE>]: <short-summary>",
     )
 
   return True, ""

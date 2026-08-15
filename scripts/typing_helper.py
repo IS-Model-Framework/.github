@@ -30,7 +30,7 @@ class TypingArgs:
   verbose: bool = True
 
   def __init__(self, args: Optional[argparse.Namespace] = None) -> None:
-    if not args is None:
+    if args is not None:
       self.changed_files = args.changed_files
 
 
@@ -142,5 +142,5 @@ if __name__ == "__main__":
     sys.exit(1)
 
   if not helper.run(changed_files, args):
-    print(f"error: static typing for python failed")
+    print("error: static typing for python failed")
     sys.exit(1)
