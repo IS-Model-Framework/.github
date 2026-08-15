@@ -39,6 +39,7 @@ jobs:
         fetch-depth: 0
         repository: ${{ github.repository }}
         submodules: recursive
+        persist-credentials: false
     
     - name: Set up Python
       uses: actions/setup-python@v4
