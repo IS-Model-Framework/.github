@@ -62,6 +62,18 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         ${{ inputs.install-command }}
+
+    - name: Memory info before build
+      run: |
+        free -h
+        echo "CPU:"
+        nproc
+        echo "Disk:"
+        df -h
+
+    - name: Build
+      run: |
+        /usr/bin/time -v ./build.sh
     
     - name: Run all tests and generate reports
       id: run-tests
