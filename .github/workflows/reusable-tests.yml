@@ -70,10 +70,6 @@ jobs:
         nproc
         echo "Disk:"
         df -h
-
-    - name: Build
-      run: |
-        /usr/bin/time -v ./build.sh
     
     - name: Run all tests and generate reports
       id: run-tests
@@ -84,7 +80,7 @@ jobs:
         # - 生成 pytest.xml 供 PR 评论使用
         # - 生成 coverage.xml 供 Codecov 和 PR 评论使用
         #
-        pytest \
+        /usr/bin/time -v pytest \
           --cov=. \
           --cov-report=xml:coverage.xml \
           --cov-report=term-missing \
