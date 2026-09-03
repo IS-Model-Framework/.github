@@ -29,7 +29,7 @@ on:
 
 jobs:
   comprehensive-tests:
-    runs-on: ubuntu-latest
+    runs-on: runner-large-disk
     name: Comprehensive Tests
     timeout-minutes: 120
     
