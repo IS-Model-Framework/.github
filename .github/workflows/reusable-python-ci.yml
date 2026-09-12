@@ -118,6 +118,10 @@ jobs:
       proton_samples_token: ${{ secrets.proton_samples_token }}
 
   # Require this stable check in rulesets instead of conditional workflow jobs.
+  # When adding a required check, update BOTH ci-result.needs and the
+  # PASSED expression below; also include its result in the diagnostic logs.
+  # Keep skip conditions aligned with the corresponding job's if condition.
+  # PR size is intentionally excluded and must not block this result.
   ci-result:
     name: CI Result
     if: ${{ always() }}
