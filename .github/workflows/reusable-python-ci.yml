@@ -132,4 +132,10 @@ jobs:
                 (inputs.skip-format-check || needs.format-check.result == 'success') &&
                 (inputs.skip-type-check || needs.type-check.result == 'success') &&
                 (inputs.skip-tests || needs.tests.result == 'success') }}
-        run: test "$PASSED" = "true"
+        run: |
+          echo "pre-commit=${{ needs.pre-commit.result }} (required; skipping is not supported)"
+          echo "commit-check=${{ needs.commit-check.result }} skip-commit-check=${{ inputs.skip-commit-check }}"
+          echo "format-check=${{ needs.format-check.result }} skip-format-check=${{ inputs.skip-format-check }}"
+          echo "type-check=${{ needs.type-check.result }} skip-type-check=${{ inputs.skip-type-check }}"
+          echo "tests=${{ needs.tests.result }} skip-tests=${{ inputs.skip-tests }}"
+          test "$PASSED" = "true"
