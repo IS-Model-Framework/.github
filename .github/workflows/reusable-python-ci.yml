@@ -116,3 +116,30 @@ jobs:
       install-command: ${{ inputs.test-install-command || inputs.install-command || 'pip install -e ".[dev]"' }}
     secrets:
       proton_samples_token: ${{ secrets.proton_samples_token }}
+
+  # Require this stable check in rulesets instead of conditional workflow jobs.
+  # When adding a required check, update BOTH ci-result.needs and the
+  # PASSED expression below; also include its result in the diagnostic logs.
+  # Keep skip conditions aligned with the corresponding job's if condition.
+  # PR size is intentionally excluded and must not block this result.
+  ci-result:
+    name: CI Result
+    if: ${{ always() }}
+    needs: [pre-commit, commit-check, format-check, type-check, tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required checks
+        env:
+          PASSED: >-
+            ${{ needs.pre-commit.result == 'success' &&
+                (inputs.skip-commit-check || needs.commit-check.result == 'success') &&
+                (inputs.skip-format-check || needs.format-check.result == 'success') &&
+                (inputs.skip-type-check || needs.type-check.result == 'success') &&
+                (inputs.skip-tests || needs.tests.result == 'success') }}
+        run: |
+          echo "pre-commit=${{ needs.pre-commit.result }} (required; skipping is not supported)"
+          echo "commit-check=${{ needs.commit-check.result }} skip-commit-check=${{ inputs.skip-commit-check }}"
+          echo "format-check=${{ needs.format-check.result }} skip-format-check=${{ inputs.skip-format-check }}"
+          echo "type-check=${{ needs.type-check.result }} skip-type-check=${{ inputs.skip-type-check }}"
+          echo "tests=${{ needs.tests.result }} skip-tests=${{ inputs.skip-tests }}"
+          test "$PASSED" = "true"
