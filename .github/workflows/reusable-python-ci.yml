@@ -107,8 +107,12 @@ jobs:
       install-command: ${{ inputs.install-command || 'pip install -e ".[dev]"' }}
   
   tests:
-    if: ${{ !inputs.skip-tests }}
-    needs: pre-commit
+    # Wait for prerequisite checks; PR size failures do not block tests.
+    needs: [pre-commit, commit-check, format-check, type-check]
+    if: >-
+      ${{ !cancelled() && !inputs.skip-tests &&
+          !contains(needs.*.result, 'failure') &&
+          !contains(needs.*.result, 'cancelled') }}
     uses: ./.github/workflows/reusable-tests.yml
     with:
       python-version: ${{ inputs.python-version || '3.11' }}
