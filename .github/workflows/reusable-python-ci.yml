@@ -43,11 +43,6 @@ on:
         required: false
         type: boolean
         default: false
-      skip-precommit:
-        description: 'Skip pre-commit checks'
-        required: false
-        type: boolean
-        default: false
       skip-pr-size-check:
         description: 'Skip pull request size check'
         required: false
@@ -77,7 +72,6 @@ jobs:
       block-threshold: ${{ inputs.pr-size-block-threshold || 500 }}
 
   pre-commit:
-    if: ${{ !inputs.skip-precommit }}
     uses: ./.github/workflows/reusable-precommit.yml
     with:
       python-version: ${{ inputs.python-version || '3.11' }}
@@ -107,10 +101,13 @@ jobs:
       install-command: ${{ inputs.install-command || 'pip install -e ".[dev]"' }}
   
   tests:
-    # Wait for prerequisite checks; PR size failures do not block tests.
+    # Pre-commit must pass; PR size failures do not block tests.
+    # Keep !cancelled() to override implicit success() and allow optional
+    # commit/format/type checks to be skipped through their skip-* inputs.
     needs: [pre-commit, commit-check, format-check, type-check]
     if: >-
       ${{ !cancelled() && !inputs.skip-tests &&
+          needs.pre-commit.result == 'success' &&
           !contains(needs.*.result, 'failure') &&
           !contains(needs.*.result, 'cancelled') }}
     uses: ./.github/workflows/reusable-tests.yml
