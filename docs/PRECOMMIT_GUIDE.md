@@ -1,432 +1,226 @@
-# Pre-commit Hooks Guide - IS-Model-Framework Organization
+# Pre-commit 使用指南
 
-本文档介绍如何在组织的项目中使用 pre-commit hooks。
+本文介绍 IS-Model-Framework 项目的本地检查与 CI 接入。检查内容以 [共享 hooks](../configs/.pre-commit-config.yaml)、[Ruff 配置](../configs/ruff.toml) 和 [pre-commit 工作流](../.github/workflows/reusable-precommit.yml) 为准；完整 CI 参数见 [README](../README.md)。
 
-## 快速开始
+## 安装与首次检查
 
-### 方法 1: 使用安装脚本（推荐）⭐
+在目标项目根目录、已激活的 Python 开发环境中执行。首次运行需要下载 hook 仓库并创建环境，后续运行会复用缓存。
+
+先安装 pre-commit：
+
 ```bash
-# 在项目根目录运行
-curl -sSL https://raw.githubusercontent.com/IS-Model-Framework/.github/main/scripts/install-precommit.sh | bash
+python -m pip install pre-commit
+mkdir -p .github/workflows
 ```
 
-### 方法 2: 手动安装
+新项目下载以下两个配置；已有同名文件时，先对照组织配置合并差异，不要直接覆盖：
+
 ```bash
-# 1. 安装 pre-commit
-pip install pre-commit
-
-# 2. 下载组织配置
-curl -sSL https://raw.githubusercontent.com/IS-Model-Framework/.github/main/configs/.pre-commit-config.yaml \
-    -o .pre-commit-config.yaml
-
-# 3. 安装 hooks
-pre-commit install
-pre-commit install --hook-type commit-msg
-
-# 4. (可选) 在所有文件上运行一次
-pre-commit run --all-files
+curl -fsSL https://raw.githubusercontent.com/IS-Model-Framework/.github/main/configs/.pre-commit-config.yaml \
+  -o .pre-commit-config.yaml
+curl -fsSL https://raw.githubusercontent.com/IS-Model-Framework/.github/main/configs/ruff.toml \
+  -o .github/workflows/ruff.toml
 ```
 
-## Pre-commit 检查内容
+共享 Ruff hooks 显式指定 `.github/workflows/ruff.toml`，仅下载 `.pre-commit-config.yaml` 不足以运行检查。codespell 通过 `--toml pyproject.toml` 读取项目配置；没有该文件的项目可创建以下最小配置，已有文件则合并对应表：
 
-### ✅ 自动修复的检查
-
-这些检查会自动修复问题：
-
-#### 通用文件检查
-- **行尾空白**: 移除多余空格
-- **文件结尾换行**: 确保文件以换行结束
-- **Requirements.txt 排序**: 自动排序依赖文件
-- **编码声明**: 移除 Python 文件的 `# -*- coding: utf-8 -*-`
-
-#### Python 代码
-- **代码格式化** (Ruff): 统一代码风格，符合 PEP 8
-- **Import 排序** (isort + Ruff): 自动整理 import 语句
-- **代码质量修复** (Ruff): 自动修复简单的代码问题
-
-#### C/C++ 代码
-- **代码格式化** (clang-format): 统一 C/C++ 代码风格
-
-### ⚠️ 需要手动修复的检查
-
-这些检查会报告问题，需要手动修复：
-
-#### 安全检查
-- **私钥检测**: 防止提交私钥、密码等敏感信息
-- **调试语句检测**: 检测 `pdb`, `ipdb` 等调试语句
-
-#### 代码质量
-- **Python AST 语法检查**: 检查 Python 语法错误
-- **YAML/JSON/TOML/XML 语法**: 检查配置文件格式
-- **大文件检查**: 防止提交超过 1MB 的大文件
-- **合并冲突标记**: 检查是否有未解决的合并冲突
-- **拼写检查** (codespell): 检查代码和注释中的拼写错误
-
-## 工具说明
-
-### 🔧 Ruff - Python Linter & Formatter
-
-Ruff 是一个极快的 Python linter 和 formatter，替代了多个工具：
-- ✅ 替代 `black` (代码格式化)
-- ✅ 替代 `flake8` (代码检查)
-- ✅ 部分替代 `isort` (import 排序)
-- ✅ 替代 `pyupgrade` (语法升级)
-
-配置文件：`configs/ruff.toml`
-
-### 📦 isort - Import 排序
-
-虽然 Ruff 已包含 import 排序功能，但 isort 提供了更细粒度的控制。
-
-如果你的项目只需要基本的 import 排序，可以考虑只使用 Ruff。
-
-### 🔤 codespell - 拼写检查
-
-自动检查代码、注释和文档中的常见拼写错误。
-
-配置：通过 `pyproject.toml` 的 `[tool.codespell]` 部分
-
-### 🔨 clang-format - C/C++ 格式化
-
-如果你的项目包含 C/C++/CUDA 代码，clang-format 会自动格式化这些文件。
-
-## 使用方法
-
-### 日常使用
-
-Pre-commit 会在每次 `git commit` 时自动运行：
-```bash
-git add .
-git commit -m "feat[API]: add new endpoint"
-# Pre-commit 自动运行检查
-```
-
-### 手动运行
-```bash
-# 检查所有文件
-pre-commit run --all-files
-
-# 只检查暂存的文件
-pre-commit run
-
-# 检查特定文件
-pre-commit run --files src/main.py src/utils.py
-
-# 运行特定 hook
-pre-commit run ruff --all-files
-pre-commit run isort --all-files
-pre-commit run codespell --all-files
-```
-
-### 跳过 Pre-commit（紧急情况）
-```bash
-# ⚠️ 仅在紧急情况使用
-git commit --no-verify -m "emergency fix"
-
-# 或跳过特定的 hook
-SKIP=ruff,isort git commit -m "WIP: work in progress"
-```
-
-## 项目自定义配置
-
-### 1. 覆盖组织配置
-
-如果项目需要特殊配置，创建项目自己的 `.pre-commit-config.yaml`：
-```yaml
-# 从组织配置开始，只修改特定规则
-repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.1
-    hooks:
-      - id: ruff
-        args: 
-          - --fix
-          - --select=E,F,I  # 项目特定规则
-```
-
-### 2. Ruff 配置
-
-在 `pyproject.toml` 中添加项目特定的 Ruff 配置：
-```toml
-[tool.ruff]
-# 项目特定配置
-line-length = 120
-
-[tool.ruff.lint]
-# 额外忽略某些规则
-ignore = ["E501", "F401"]
-
-# 为特定文件设置规则
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
-"tests/**/*.py" = ["S101"]
-```
-
-### 3. isort 配置
-
-在 `pyproject.toml` 中配置：
-```toml
-[tool.isort]
-profile = "black"
-line_length = 100
-skip_gitignore = true
-known_first_party = ["your_package_name"]
-```
-
-### 4. codespell 配置
-
-在 `pyproject.toml` 中配置：
 ```toml
 [tool.codespell]
-skip = '*.git,*.svg,*.lock,__pycache__,build,dist'
-ignore-words-list = 'cann,som,nd'  # 忽略特定"拼写错误"
+ignore-words-list = "cann"
 ```
 
-### 5. 禁用特定文件类型
+如果项目不使用 `pyproject.toml`，也可以从 codespell hook 的 `args` 中移除 `--toml` 与 `pyproject.toml`，保留 `['-L', 'cann']`。
 
-如果项目不包含 C/C++ 代码，可以移除 clang-format：
-```yaml
-# .pre-commit-config.yaml
-# 注释掉或删除 clang-format 部分
-# - repo: https://github.com/pre-commit/mirrors-clang-format
-#   rev: v21.1.2
-#   hooks:
-#     - id: clang-format
+安装 Git hook 并进行首次全量检查：
+
+```bash
+pre-commit validate-config
+pre-commit install
+pre-commit run --all-files
 ```
 
-## CI/CD 集成
+将 `.pre-commit-config.yaml`、`.github/workflows/ruff.toml` 和所需的 `pyproject.toml` 配置纳入版本控制，使本地与 CI 使用相同规则。每个开发者仍需在自己的 checkout 中执行 `pre-commit install`。
 
-在项目的 `.github/workflows/ci.yml` 中添加：
+仓库也提供 [install-precommit.sh](../scripts/install-precommit.sh)。当前脚本的 Ruff 下载分支含非 ASCII 空白，可能导致命令执行失败，因此这里使用手动安装步骤。脚本还要求 `.git` 是目录、通过 `/dev/tty` 交互，不能直接用于 Git worktree 或无人值守 CI；可选全量检查失败时也不会让脚本以失败退出。
+
+## 当前检查内容
+
+| 工具与固定版本 | Hook ID | 行为 |
+| --- | --- | --- |
+| pre-commit-hooks `v6.0.0` | `trailing-whitespace`、`end-of-file-fixer`、`requirements-txt-fixer` | 修复行尾空白、文件末尾换行和 requirements 排序 |
+| pre-commit-hooks `v6.0.0` | `check-yaml`、`check-json`、`check-toml`、`check-xml`、`check-ast` | 检查配置与 Python 语法 |
+| pre-commit-hooks `v6.0.0` | `check-merge-conflict`、`debug-statements`、`detect-private-key` | 检查合并冲突标记、Python 调试语句与私钥 |
+| pre-commit-hooks `v6.0.0` | `check-added-large-files` | 使用 `--maxkb=1000` 限制新增大文件 |
+| Ruff `v0.14.1` | `ruff-check` | 对 `.py` 文件执行 lint，使用 `--fix` 自动修复可修复项 |
+| Ruff `v0.14.1` | `ruff-format` | 格式化 `.py` 文件 |
+| codespell `v2.4.1` | `codespell` | 检查拼写，读取 `pyproject.toml` 并通过 `-L cann` 增加忽略词；当前未开启自动改写 |
+| clang-format `v21.1.2` | `clang-format` | 格式化 C、C++ 和 CUDA 文件 |
+
+当前配置没有 isort、编码声明移除、mypy 或提交信息校验 hook。Ruff 的默认 lint 规则未启用 `I`（import 排序）。私钥检查也不等同于覆盖所有密码或凭据的检测。
+
+组织 Ruff 配置使用 88 字符行宽、2 空格缩进、Python 3.11 目标、双引号、LF 换行及 preview 模式。完整规则见 [configs/ruff.toml](../configs/ruff.toml)。
+
+## 日常使用
+
+安装后，Git 提交会自动检查暂存文件。也可以手动指定检查范围：
+
+```bash
+# 暂存文件
+pre-commit run
+
+# 所有受版本控制的文件
+pre-commit run --all-files
+
+# 指定文件（替换为项目中的实际路径）
+pre-commit run --files package/module.py tests/test_module.py
+
+# 指定 hook
+pre-commit run ruff-check --all-files
+pre-commit run ruff-format --all-files
+pre-commit run codespell --all-files
+pre-commit run clang-format --all-files
+
+# 两个 revision 之间的变更；确保本地已有 origin/main
+pre-commit run --from-ref origin/main --to-ref HEAD
+```
+
+hooks 自动修改文件时，本次检查通常会报告失败。查看 `git diff`，确认修改符合预期，重新暂存修改的文件，再运行检查。CI 不会替你保存或提交这些修正。
+
+临时排查特定 hook 时，可以使用正确的 hook ID：
+
+```bash
+SKIP=codespell pre-commit run --all-files
+```
+
+这只影响本次本地运行，不会关闭 CI 中的检查。`--from-ref` 的增量检查也不能代替 CI 的全量检查。
+
+## 项目配置定制
+
+### Ruff 配置路径
+
+默认方式是修改项目的 `.github/workflows/ruff.toml`。例如在现有 `[lint]` 表中加入 `extend-select = ["I"]`，可额外启用 import 排序；不要重复创建同名 TOML 表。
+
+若改用 `pyproject.toml`，需把两个 Ruff hooks 的路径一起修改。以下为替换共享配置中 Ruff repo 条目的片段，保留其他 repo 条目：
+
 ```yaml
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.14.1
+  hooks:
+    - id: ruff-check
+      args: [--fix, --config=pyproject.toml]
+      files: \.py$
+    - id: ruff-format
+      args: [--config=pyproject.toml]
+      files: \.py$
+```
+
+在 `pyproject.toml` 中通过 `extend` 保留组织规则，再增加项目覆盖项：
+
+```toml
+[tool.ruff]
+extend = ".github/workflows/ruff.toml"
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I"]
+```
+
+此示例仍依赖项目中的 `.github/workflows/ruff.toml`。IDE 格式化也应指向相同配置，并尽量与 hook 固定的 Ruff 版本一致。完整 CI 的独立格式检查需同步设置 `ruff-config-path: 'pyproject.toml'`；该参数不会自动修改 pre-commit hooks。
+
+### codespell 忽略词与文件
+
+在现有 `pyproject.toml` 中合并以下配置：
+
+```toml
+[tool.codespell]
+skip = "*.svg,*.lock,build,dist"
+ignore-words-list = "cann,som,nd"
+```
+
+为避免命令行参数与配置文件重复维护忽略词，可将该 hook 的 `args` 改为 `['--toml', 'pyproject.toml']`，统一在 TOML 中保留所需词汇。修改后单独运行 `pre-commit run codespell --all-files` 验证。
+
+### C/C++/CUDA
+
+项目可以在根目录维护 `.clang-format`，例如：
+
+```yaml
+BasedOnStyle: Google
+IndentWidth: 2
+ColumnLimit: 88
+```
+
+组织 hook 已声明 `types_or: [c++, c, cuda]`。没有匹配文件时会跳过该 hook；纯 Python 项目也可以从项目配置中移除这个 repo 条目。
+
+## CI 接入
+
+独立接入 pre-commit 时，在项目 `.github/workflows/ci.yml` 使用：
+
+```yaml
+name: Pre-commit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
 jobs:
   pre-commit:
     uses: IS-Model-Framework/.github/.github/workflows/reusable-precommit.yml@main
     with:
       python-version: '3.11'
-    secrets:
-      ORG_CI_TOKEN: ${{ secrets.ORG_CI_TOKEN }}
+      precommit-config-path: '.pre-commit-config.yaml'
 ```
 
-## 常见问题
+该工作流仅接受两个可选输入，不声明 secret，无需传入 `ORG_CI_TOKEN`：
 
-### Q: Pre-commit 太慢了怎么办？
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `python-version` | `'3.11'` | 运行 pre-commit 的 Python 版本 |
+| `precommit-config-path` | `''` | 相对项目根目录的自定义 hooks 配置路径 |
+
+配置选择顺序是有效的自定义路径、项目根目录 `.pre-commit-config.yaml`、组织共享配置。非空自定义路径会关闭组织配置下载，因此务必保证指定文件存在，不能依赖组织回退。
+
+未传自定义路径时，工作流从 `${{ github.repository_owner }}/.github` 下载组织配置，并在运行前将组织 `ruff.toml` 复制到项目根目录。共享 Ruff hooks 仍读取 `.github/workflows/ruff.toml`，根目录副本不能替代该文件。
+
+工作流缓存 `~/.cache/pre-commit`，先执行 `pre-commit run --all-files`。失败后会尝试回退：PR 事件检查与目标分支之间的变更，其他事件执行普通 `pre-commit run`。回退成功不会消除前面全量步骤的失败。
+
+使用完整 [Python CI](../.github/workflows/reusable-python-ci.yml) 的项目已经包含 pre-commit，无需重复添加上述 job。完整 CI 中 pre-commit 不可跳过，且没有暴露 `precommit-config-path`；项目应在根目录维护 `.pre-commit-config.yaml`。`skip-format-check` 仅跳过独立格式检查，`CI Result` 仍要求 pre-commit 成功。
+
+## 提交信息检查
+
+`pre-commit install` 安装的是提交前检查。共享配置没有提交信息校验 hook，即使安装 `commit-msg` 阶段也不会自动获得组织提交模板校验。
+
+完整 CI 通过 [reusable-commit-check.yml](../.github/workflows/reusable-commit-check.yml) 和 [check_mr_logs.py](../scripts/check_mr_logs.py) 检查最新提交。格式要求包括 `<type>[<SCOPE>]: <short-summary>` 标题、`Problem:` 或 `Task:`、`Solution:`、`Test:`、有效 `JIRA:` 字段，详见 [README](../README.md)。本地 pre-commit 通过不代表提交信息已通过 CI 校验。
+
+## 排查与维护
+
+| 现象 | 处理方式 |
+| --- | --- |
+| 找不到 `.github/workflows/ruff.toml` | 补齐首次安装步骤中的文件，或同步修改两个 Ruff hooks 的 `--config` |
+| codespell 报 TOML 文件不存在 | 添加 `pyproject.toml`，或移除对应 `--toml` 参数 |
+| 找不到 `ruff` / `isort` hook | 当前 ID 为 `ruff-check`、`ruff-format`；共享配置没有 isort |
+| 本地通过、CI 失败 | 本地运行 `--all-files`，确认配置已提交，并比较 CI 实际选择的配置及工具版本 |
+| Ruff 修改风格与 IDE 不一致 | 统一配置路径和 Ruff 版本；显式 `--config` 不会自动改为项目其他配置 |
+| hooks 修改了文件 | 检查 diff，重新暂存修正后再运行 |
+
+日常运行复用缓存。环境异常时再清理并重建：
+
 ```bash
-# 使用缓存
-pre-commit run --all-files
-
-# 只检查改动的文件
-pre-commit run
-
-# 禁用某些慢的 hooks（如 codespell）
-SKIP=codespell pre-commit run --all-files
-```
-
-### Q: 如何更新 pre-commit hooks？
-```bash
-# 自动更新到最新版本
-pre-commit autoupdate
-
-# 更新后重新安装
-pre-commit install
-```
-
-### Q: 如何临时禁用某个 hook？
-
-在 `.pre-commit-config.yaml` 中：
-```yaml
-repos:
-  - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
-    hooks:
-      - id: codespell
-        stages: [manual]  # 改为 manual，不会自动运行
-```
-
-### Q: Ruff 和 isort 冲突怎么办？
-
-Ruff 已经包含了 import 排序功能。如果冲突，可以：
-
-**选项 1**: 只使用 Ruff（推荐）
-```yaml
-# 移除 isort，只保留 ruff
-```
-
-**选项 2**: 配置 Ruff 不处理 imports
-```toml
-[tool.ruff.lint]
-ignore = ["I"]  # 禁用 ruff 的 isort 功能
-```
-
-### Q: codespell 误报怎么办？
-
-在 `pyproject.toml` 中添加忽略词汇：
-```toml
-[tool.codespell]
-ignore-words-list = 'cann,som,nd,yourmistakeword'
-```
-
-或在代码中添加注释：
-```python
-# codespell:ignore yourmistakeword
-variable_name = "yourmistakeword"  # codespell:ignore
-```
-
-### Q: Pre-commit 与 IDE 格式化冲突？
-
-推荐在 IDE 中也使用相同的工具：
-
-**VS Code** (`settings.json`):
-```json
-{
-  "[python]": {
-    "editor.formatOnSave": true,
-    "editor.defaultFormatter": "charliermarsh.ruff",
-    "editor.codeActionsOnSave": {
-      "source.organizeImports": true
-    }
-  }
-}
-```
-
-**PyCharm**:
-1. Settings → Tools → External Tools
-2. 添加 Ruff 和 isort 作为外部工具
-
-### Q: 如何处理 C/C++ 代码格式化？
-
-clang-format 使用项目根目录的 `.clang-format` 配置文件：
-```yaml
-# .clang-format
-BasedOnStyle: Google
-IndentWidth: 4
-ColumnLimit: 100
-```
-
-## 最佳实践
-
-### 1. 早提交，常提交
-Pre-commit 让小的提交更容易通过检查，避免积累大量需要修复的问题。
-
-### 2. 先运行一次完整检查
-在新项目设置 pre-commit 后，先运行一次完整检查：
-```bash
+pre-commit clean
+pre-commit install-hooks
 pre-commit run --all-files
 ```
 
-### 3. 保持配置更新
-定期更新 hooks 版本：
+更新项目的 hook 版本时运行：
+
 ```bash
 pre-commit autoupdate
+pre-commit validate-config
+pre-commit run --all-files
 ```
 
-### 4. 团队协作
-- 确保所有团队成员都安装了 pre-commit
-- 在 `CONTRIBUTING.md` 中说明 pre-commit 使用方法
-- 定期同步组织级别的配置更新
-
-### 5. 性能优化
-- 对于大型项目，考虑只在 CI 中运行某些慢的 hooks
-- 使用 `files` 和 `exclude` 参数限制检查范围
-- 利用 pre-commit 的缓存机制
-
-### 6. 处理遗留代码
-如果在大型遗留项目中引入 pre-commit：
-```bash
-# 只对新提交的代码运行检查
-pre-commit run --from-ref origin/main --to-ref HEAD
-```
-
-## 工具链对比
-
-| 工具                 | 用途                 | 是否自动修复 | 速度     |
-| -------------------- | -------------------- | ------------ | -------- |
-| **Ruff**             | Linting + Formatting | ✅            | ⚡⚡⚡ 极快 |
-| **isort**            | Import 排序          | ✅            | ⚡⚡ 快    |
-| **codespell**        | 拼写检查             | ✅ (部分)     | ⚡⚡ 快    |
-| **clang-format**     | C/C++ 格式化         | ✅            | ⚡⚡ 快    |
-| **pre-commit-hooks** | 通用检查             | ✅ (部分)     | ⚡⚡⚡ 极快 |
-
-## 支持的语言和文件类型
-
-- ✅ **Python** (.py)
-- ✅ **C/C++** (.c, .cpp, .h, .hpp)
-- ✅ **CUDA** (.cu)
-- ✅ **YAML** (.yaml, .yml)
-- ✅ **JSON** (.json)
-- ✅ **TOML** (.toml)
-- ✅ **XML** (.xml)
-- ✅ **Markdown** (.md)
-- ✅ **Requirements files** (requirements.txt)
-
-## 支持
-
-遇到问题？
-
-- 📖 查看 [Pre-commit 官方文档](https://pre-commit.com/)
-- 📖 查看 [Ruff 文档](https://docs.astral.sh/ruff/)
-- 📖 查看 [isort 文档](https://pycqa.github.io/isort/)
-- 💬 在 Organization Discussions 中提问
-- 🐛 在 `.github` 仓库提交 Issue
-
-## 相关链接
-
-- [Ruff 文档](https://docs.astral.sh/ruff/)
-- [isort 文档](https://pycqa.github.io/isort/)
-- [codespell 文档](https://github.com/codespell-project/codespell)
-- [clang-format 文档](https://clang.llvm.org/docs/ClangFormat.html)
-- [Pre-commit Hooks 列表](https://pre-commit.com/hooks.html)
-
----
-
-## 附录：完整配置示例
-
-### Python 项目示例
-```yaml
-# .pre-commit-config.yaml
-repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-added-large-files
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.1
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-```
-
-### 混合项目（Python + C++）示例
-```yaml
-# .pre-commit-config.yaml
-repos:
-  # Python
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.1
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
-  # C/C++
-  - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v21.1.2
-    hooks:
-      - id: clang-format
-        types_or: [c++, c]
-
-  # Common
-  - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.1
-    hooks:
-      - id: codespell
-```
+`autoupdate` 修改项目配置中的版本，不会同步组织 `ruff.toml` 或组织 hooks 的新增规则。检查配置 diff 和格式化结果后再提交；组织配置更新也需要明确合并到项目副本中。

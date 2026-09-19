@@ -1,6 +1,6 @@
 # Organization CI Infrastructure
 
-本仓库为 IS-Model-Framework 组织提供可复用的 GitHub Actions 工作流、检查脚本和 pre-commit 配置，覆盖 Python CI，以及 C/C++/CUDA 的本地格式检查。当前 7 个工作流均通过 `workflow_call` 被项目调用；本仓库未定义发布或部署流程。
+本仓库为 IS-Model-Framework 组织提供可复用的 GitHub Actions 工作流、检查脚本和 pre-commit 配置，覆盖 Python CI，以及 C/C++ 的本地格式检查。当前 7 个工作流均通过 `workflow_call` 被项目调用；本仓库未定义发布或部署流程。
 
 ## 目录
 
@@ -10,10 +10,12 @@
 | [scripts/](scripts/) | 提交信息、格式、类型、PR 大小检查及本地安装脚本 |
 | [configs/.pre-commit-config.yaml](configs/.pre-commit-config.yaml) | 组织共享 hooks |
 | [configs/ruff.toml](configs/ruff.toml) | 组织共享 Ruff 规则 |
-| [docs/PRECOMMIT_GUIDE.md](docs/PRECOMMIT_GUIDE.md) | pre-commit 使用指南；部分示例尚未同步，实际 hooks 和参数以配置及本 README 为准 |
+| [docs/PRECOMMIT_GUIDE.md](docs/PRECOMMIT_GUIDE.md) | pre-commit 安装、日常使用、项目配置与 CI 接入指南 |
 | [profile/README.md](profile/README.md) | 组织主页介绍，与本仓库的 CI 使用说明分开维护 |
 
 ## 项目接入
+
+> 项目创建时直接采用[repo-template](https://github.com/IS-Model-Framework/Tools/tree/main/jax_template_kit)，避免手动配置。这里主要解释项目如何接入pre-commit CI流程。  
 
 ### 1. 准备本地检查配置
 
