@@ -103,6 +103,7 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 | `ruff-config-path` | string | `''` | 独立格式检查使用的 Ruff 配置路径 |
 | `install-command` | string | `pip install -e ".[dev]"` | 格式、类型及默认测试依赖安装命令 |
 | `test-install-command` | string | `''` | 仅覆盖测试安装命令；为空时使用 `install-command` |
+| `pytest-runner` | string | `''` | PR 依赖测试的仓库内 Python 入口；为空或非 PR 时仍运行全量 pytest |
 | `skip-commit-check` | boolean | `false` | 跳过提交信息检查 |
 | `skip-format-check` | boolean | `false` | 跳过独立格式检查；pre-commit 中的 Ruff 仍会运行 |
 | `skip-type-check` | boolean | `false` | 跳过 mypy |
@@ -198,7 +199,30 @@ pytest --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing \
   --junitxml=pytest.xml -v -s --tb=short
 ```
 
-当前没有自定义测试命令参数，测试发现范围由项目 pytest 配置决定。默认生成 `coverage.xml` 和 `pytest.xml`，在 PR 上评论覆盖率并上传 Codecov；没有 `upload-artifact` 步骤。评论和上传步骤未使用 `always()`，测试失败时不会继续执行它们。
+默认测试发现范围由项目 pytest 配置决定。生成 `coverage.xml` 和 `pytest.xml`，在 PR 上评论覆盖率并上传 Codecov。评论和上传步骤未使用 `always()`，测试失败时不会继续执行它们。
+
+完整 CI 和 tests 子工作流均接受可选的 `pytest-runner`，默认 `''`。
+例如传入 `tools/run_unit_tests.py` 后，PR 的原有测试阶段显示为 **Core Dependency Tests**，
+运行 `python -- <runner> <原有 pytest 参数>`；push 或未配置入口时仍显示
+**Comprehensive Tests**，运行上面的全量命令。入口文件不存在时回退全量 pytest。
+
+仍然只有一个测试阶段：`tests` 的前置检查、`CI Result` 的 `needs.tests.result`
+汇总及 required check 名称保持不变。入口原样返回 pytest 退出码，失败不重试；
+不能同时设置 `skip-tests: true`，否则会跳过测试及其汇总要求。
+
+入口接收环境变量 `PR_BASE_SHA`，可将实际 checkout 的执行计划写到
+`PYTEST_PLAN_PATH`。配置入口的 PR 会在测试结束后尝试上传
+`core-dependency-tests-<attempt>`（计划、可选的候选映射、JUnit、覆盖率），缺失文件只警告。
+PallasKernels 的 runner 在同一测试阶段打印选测计划并生成候选映射，
+不再使用独立的 observation job；候选生成失败不阻断 pytest。
+覆盖率评论和 Codecov 流程保持原样，但选测后的 PR 覆盖率代表本次选中范围。
+
+先合入共享工作流的新参数，再启用项目调用；回滚时删除项目的 `pytest-runner`
+参数即可恢复原测试阶段的全量执行。可本地验证分流与失败传递：
+
+```bash
+python -m pytest tests/test_pytest_runner_workflow.py -q
+```
 
 ### PR 大小
 
