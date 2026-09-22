@@ -3,6 +3,11 @@ name: Reusable - Tests
 on:
   workflow_call:
     inputs:
+      pytest-runner:
+        description: 'Optional repository Python runner for PR dependency tests'
+        required: false
+        type: string
+        default: ''
       python-version:
         description: 'Python version to use'
         required: false
@@ -30,7 +35,7 @@ on:
 jobs:
   comprehensive-tests:
     runs-on: ubuntu-latest
-    name: Comprehensive Tests
+    name: ${{ github.event_name == 'pull_request' && inputs.pytest-runner != '' && 'Core Dependency Tests' || 'Comprehensive Tests' }}
     
     steps:
     - name: Checkout code
@@ -62,21 +67,41 @@ jobs:
         python -m pip install --upgrade pip
         ${{ inputs.install-command }}
     
-    - name: Run all tests and generate reports
+    - name: Run tests and generate reports
       id: run-tests
+      env:
+        PYTEST_RUNNER: ${{ inputs.pytest-runner }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PYTEST_PLAN_PATH: ${{ runner.temp }}/unit-test-plan.json
       run: |
         export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-        # 
-        # 运行所有测试 (unit 和 integration)
-        # - 生成 pytest.xml 供 PR 评论使用
-        # - 生成 coverage.xml 供 Codecov 和 PR 评论使用
-        #
-        pytest \
-          --cov=. \
-          --cov-report=xml:coverage.xml \
-          --cov-report=term-missing \
-          --junitxml=pytest.xml \
+        pytest_args=(
+          --cov=.
+          --cov-report=xml:coverage.xml
+          --cov-report=term-missing
+          --junitxml=pytest.xml
           -v -s --tb=short
+        )
+        if [[ "$GITHUB_EVENT_NAME" == "pull_request" && -n "$PYTEST_RUNNER" && -f "$PYTEST_RUNNER" ]]; then
+          python -- "$PYTEST_RUNNER" "${pytest_args[@]}"
+        else
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" && -n "$PYTEST_RUNNER" ]]; then
+            echo "::warning::Pytest runner unavailable; running full pytest"
+          fi
+          pytest "${pytest_args[@]}"
+        fi
+
+    - name: Save dependency test plan
+      if: ${{ always() && github.event_name == 'pull_request' && inputs.pytest-runner != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: core-dependency-tests-${{ github.run_attempt }}
+        path: |
+          ${{ runner.temp }}/unit-test-plan.json
+          ${{ runner.temp }}/unit-test-selection-candidate.json
+          pytest.xml
+          coverage.xml
+        if-no-files-found: warn
     
     - name: Pytest coverage comment
       # 仅在 input 启用时，并且仅在 pull_request 事件上运行
