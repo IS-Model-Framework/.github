@@ -202,9 +202,9 @@ pytest --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing \
 默认测试发现范围由项目 pytest 配置决定。生成 `coverage.xml` 和 `pytest.xml`，在 PR 上评论覆盖率并上传 Codecov。评论和上传步骤未使用 `always()`，测试失败时不会继续执行它们。
 
 完整 CI 和 tests 子工作流均接受可选的 `pytest-runner`，默认 `''`。
-例如传入 `tools/run_unit_tests.py` 后，PR 的原有测试阶段显示为 **Core Dependency Tests**，
-运行 `python -- <runner> <原有 pytest 参数>`；push 或未配置入口时仍显示
-**Comprehensive Tests**，运行上面的全量命令。入口文件不存在时回退全量 pytest。
+测试阶段统一保持 **Comprehensive Tests** 名称，以兼容现有分支保护规则。
+例如传入 `tools/run_unit_tests.py` 后，PR 运行 `python -- <runner> <原有 pytest 参数>`
+执行选测；push 或未配置入口时运行上面的全量命令。入口文件不存在时回退全量 pytest。
 
 仍然只有一个测试阶段：`tests` 的前置检查、`CI Result` 的 `needs.tests.result`
 汇总及 required check 名称保持不变。入口原样返回 pytest 退出码，失败不重试；

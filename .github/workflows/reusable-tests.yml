@@ -35,7 +35,7 @@ on:
 jobs:
   comprehensive-tests:
     runs-on: ubuntu-latest
-    name: ${{ github.event_name == 'pull_request' && inputs.pytest-runner != '' && 'Core Dependency Tests' || 'Comprehensive Tests' }}
+    name: Comprehensive Tests
     
     steps:
     - name: Checkout code
