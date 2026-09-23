@@ -48,6 +48,7 @@ jobs:
     
     - name: Install dependencies
       env:
+        GH_TOKEN: ${{ secrets.proton_samples_token }}
         GIT_CONFIG_COUNT: ${{ secrets.proton_samples_token != '' && '4' || '0' }}
         GIT_CONFIG_KEY_0: 'url.https://x-access-token:${{ secrets.proton_samples_token }}@github.com/IS-Model-Framework/ProtonSamples.insteadOf'
         GIT_CONFIG_VALUE_0: 'https://github.com/IS-Model-Framework/ProtonSamples'

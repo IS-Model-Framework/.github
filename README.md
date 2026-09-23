@@ -113,7 +113,7 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 
 完整 CI 使用 `||` 回退默认值，大小阈值传入 `0` 时也会回退到默认值。警告阈值必须小于阻断阈值。
 
-可选 secret `proton_samples_token` 会传给测试工作流，仅在测试依赖安装步骤中为以下组织仓库的 HTTPS Git URL 设置认证：`ProtonSamples`、`PallasKernels`、`ProtonFramework`、`Pallas_training`。它不用于 checkout、格式或类型检查中的依赖安装。需要时在调用 job 中显式传递：
+可选 secret `proton_samples_token` 会传给测试工作流，仅在测试依赖安装步骤中为以下组织仓库的 HTTPS Git URL 设置认证：`ProtonSamples`、`PallasKernels`、`ProtonFramework`、`Pallas_training`。同一步还通过 `GH_TOKEN` 提供该 token，供安装命令下载私有 GitHub Release asset。它不用于 checkout、格式或类型检查中的依赖安装。需要时在调用 job 中显式传递：
 
 ```yaml
     secrets:
