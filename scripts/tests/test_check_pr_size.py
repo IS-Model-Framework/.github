@@ -3,7 +3,13 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from scripts.check_pr_size import check_pr_size, is_excluded_file
+from scripts.check_pr_size import (
+  FileChange,
+  build_summary,
+  check_pr_size,
+  is_excluded_file,
+  parse_numstat,
+)
 
 
 class PrSizeTests(unittest.TestCase):
@@ -13,11 +19,22 @@ class PrSizeTests(unittest.TestCase):
       "test/helpers.py",
       "src/module/tests/helpers.py",
       "src/__tests__/helpers.ts",
+      "spec/helpers.rb",
+      "src/module/specs/helpers.js",
+      "testdata/input.json",
+      "src/module/testdata/input.txt",
+      "src/TestData/input.json",
       "src/test_api.py",
       "src/api_test.py",
       "conftest.py",
+      "src/api_test.go",
+      "src/api_test.c",
+      "src/api_test.cc",
+      "src/api_test.cpp",
+      "src/api_test.java",
       "src/api.test.ts",
       "src/api.spec.tsx",
+      "src/api_spec.rb",
       "Tests/TEST_API.PY",
     ):
       with self.subTest(path=path):
@@ -25,14 +42,33 @@ class PrSizeTests(unittest.TestCase):
         self.assertTrue(excluded)
         self.assertTrue(reason.startswith("test "))
 
+  def test_bare_test_names_are_reserved_even_under_src(self):
+    # A production src/test.py is still excluded by the naming convention;
+    # renaming it to src/testing.py keeps its additions counted.
+    for path in ("test.py", "tests.py", "src/test.py", "src/tests.py"):
+      with self.subTest(path=path):
+        excluded, reason = is_excluded_file(path)
+        self.assertTrue(excluded)
+        self.assertTrue(reason.startswith("test file: "))
+    self.assertEqual(is_excluded_file("src/testing.py"), (False, ""))
+
   def test_development_files_are_still_counted(self):
+    # Only the documented conventions are excluded; similar names stay counted.
+    # src/test.py and src/tests.py are reserved (see the dedicated test above).
     for path in (
       "src/api.py",
       "src/testing.py",
       "src/test_utils/helpers.py",
       "src/tests_support/helpers.py",
       "src/contest.py",
+      "src/latest.go",
+      "src/test.go",
+      "src/testdata.py",
+      "src/testdata_support/helpers.py",
+      "src/spec.py",
+      "src/spec_helpers/helpers.rb",
       "src/specification.ts",
+      "src/api_test_helpers.go",
       "README.md",
       ".github/workflows/ci.yml",
     ):
@@ -67,9 +103,32 @@ class PrSizeTests(unittest.TestCase):
         report = write_summary.call_args.args[0]
         self.assertIn(f"- Status: {status}", report)
         self.assertIn(f"- Counted added lines: {additions}\n", report)
+        self.assertIn("- Excluded added lines: 2000\n", report)
         self.assertIn("- Counted files: 1", report)
         self.assertIn("- Excluded files: 2", report)
         self.assertIn("`tests/test_api.py` (test directory: tests)", report)
+
+  def test_excluded_additions_include_all_exclusion_types(self):
+    excluded = parse_numstat(
+      "125\t0\ttests/test_api.py\n"
+      "10\t0\tpoetry.lock\n"
+      "15\t0\tgenerated/api.py\n"
+      "-\t-\timage.png\n"
+    )
+    report = build_summary(0, [], excluded, 300, 500)
+    self.assertIn("- Excluded added lines: 150\n", report)
+    self.assertIn("- Status: PASS", report)
+    empty_report = build_summary(0, [], [], 300, 500)
+    self.assertIn("- Excluded added lines: 0\n", empty_report)
+
+  def test_excluded_total_includes_files_beyond_display_limit(self):
+    excluded = [
+      FileChange(f"tests/test_{i}.py", i, True, "test directory: tests")
+      for i in range(1, 26)
+    ]
+    report = build_summary(0, [], excluded, 300, 500)
+    self.assertIn("- Excluded added lines: 325\n", report)
+    self.assertIn("...and 5 more", report)
 
 
 if __name__ == "__main__":
