@@ -149,7 +149,7 @@ jobs:
 | commit-check | 无 |
 | format-check | `ruff-config-path: ''`、`install-command: 'pip install -e ".[dev]"'` |
 | type-check | `install-command: 'pip install -e ".[dev]"'` |
-| tests | `install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token` |
+| tests | `pytest-runner: ''`、`install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token` |
 | pr-size-check | `warning-threshold: 300`、`block-threshold: 500` |
 
 `precommit-config-path`、`upload-coverage` 和 `comment-on-pr` 只在对应子工作流暴露，不能直接传给完整 CI。

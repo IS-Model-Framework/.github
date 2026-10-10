@@ -13,12 +13,37 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("workflow", ["reusable-python-ci.yml", "reusable-tests.yml"])
+def test_pytest_runner_input_contract(workflow):
+  document = yaml.load(
+    (ROOT / ".github/workflows" / workflow).read_text(), Loader=yaml.BaseLoader
+  )
+  runner_input = document["on"]["workflow_call"]["inputs"]["pytest-runner"]
+  assert runner_input["type"] == "string"
+  assert runner_input["required"] == "false"
+  assert runner_input["default"] == ""
+
+
+def test_complete_ci_forwards_pytest_runner_to_tests_workflow():
+  document = yaml.load(
+    (ROOT / ".github/workflows/reusable-python-ci.yml").read_text(),
+    Loader=yaml.BaseLoader,
+  )
+  tests_job = document["jobs"]["tests"]
+  assert tests_job["uses"] == "./.github/workflows/reusable-tests.yml"
+  assert tests_job["with"]["pytest-runner"] == "${{ inputs.pytest-runner }}"
+
+
 def load_test_step():
   document = yaml.load(
     (ROOT / ".github/workflows/reusable-tests.yml").read_text(), Loader=yaml.BaseLoader
   )
   steps = document["jobs"]["comprehensive-tests"]["steps"]
   return next(step for step in steps if step.get("id") == "run-tests")
+
+
+def test_test_step_binds_pytest_runner_input():
+  assert load_test_step()["env"]["PYTEST_RUNNER"] == "${{ inputs.pytest-runner }}"
 
 
 @pytest.mark.parametrize(
@@ -69,6 +94,11 @@ def test_dispatch_preserves_pytest_arguments_and_failure(
     text=True,
   )
   assert result.returncode == exit_code, result.stderr
+  warning = "::warning::Pytest runner unavailable; running full pytest"
+  if event == "pull_request" and runner and not exists:
+    assert warning in result.stdout
+  else:
+    assert warning not in result.stdout
   calls = [
     json.loads(line) for line in (tmp_path / "calls.jsonl").read_text().splitlines()
   ]
