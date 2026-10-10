@@ -47,6 +47,16 @@ EXCLUDED_PATTERNS = (
   "*.map",
 )
 
+TEST_DIRS = {"test", "tests", "__tests__"}
+
+TEST_PATTERNS = (
+  "test_*.py",
+  "*_test.py",
+  "conftest.py",
+  "*.test.*",
+  "*.spec.*",
+)
+
 BINARY_EXTENSIONS = {
   ".7z",
   ".avif",
@@ -96,6 +106,14 @@ def is_excluded_file(path: str) -> Tuple[bool, str]:
 
   if basename in LOCK_FILE_NAMES:
     return True, "lock file"
+
+  for part in parts[:-1]:
+    if part in TEST_DIRS:
+      return True, f"test directory: {part}"
+
+  for pattern in TEST_PATTERNS:
+    if fnmatch.fnmatch(basename, pattern):
+      return True, f"test file: {pattern}"
 
   for part in parts:
     if part in EXCLUDED_DIRS:
