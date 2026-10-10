@@ -47,6 +47,25 @@ EXCLUDED_PATTERNS = (
   "*.map",
 )
 
+TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "testdata"}
+
+# Supported conventions (case-insensitive): Python test.py, tests.py, test_*.py,
+# and conftest.py; cross-language *_test.* (Python, Go, C/C++, etc.);
+# dotted *.test.* / *.spec.* and underscored *_spec.* (including RSpec).
+# TEST_DIRS apply at any directory depth, including testdata fixtures.
+# Bare test.py/tests.py are reserved for tests even under src/; production files
+# using these names must be renamed to remain counted.
+TEST_PATTERNS = (
+  "test.py",
+  "tests.py",
+  "test_*.py",
+  "*_test.*",
+  "conftest.py",
+  "*.test.*",
+  "*.spec.*",
+  "*_spec.*",
+)
+
 BINARY_EXTENSIONS = {
   ".7z",
   ".avif",
@@ -96,6 +115,14 @@ def is_excluded_file(path: str) -> Tuple[bool, str]:
 
   if basename in LOCK_FILE_NAMES:
     return True, "lock file"
+
+  for part in parts[:-1]:
+    if part in TEST_DIRS:
+      return True, f"test directory: {part}"
+
+  for pattern in TEST_PATTERNS:
+    if fnmatch.fnmatch(basename, pattern):
+      return True, f"test file: {pattern}"
 
   for part in parts:
     if part in EXCLUDED_DIRS:
@@ -179,6 +206,7 @@ def build_summary(
     "",
     f"- Status: {status}",
     f"- Counted added lines: {total_additions}",
+    f"- Excluded added lines: {sum(change.additions for change in excluded_files)}",
     f"- Warning threshold: {warning_threshold}",
     f"- Blocking threshold: {block_threshold}",
     f"- Counted files: {len(counted_files)}",

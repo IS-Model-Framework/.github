@@ -205,3 +205,7 @@ pytest --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing \
 [check_pr_size.py](scripts/check_pr_size.py) 使用 `git diff --numstat base...head`，统计相对于 merge-base 的新增行数，不以删除行抵消新增行。默认 `301–500` 行警告，`501` 行及以上失败，非 PR 事件不执行统计。
 
 排除范围包括脚本列出的锁文件、`generated` / `__generated__` / `vendor` / `node_modules` / `build` / `dist` / `.venv` 目录、压缩前端文件及 source map、二进制 diff，以及指定静态资源扩展名（包括 SVG、PDF）。完整清单以脚本常量为准。结果写入日志和 Actions job summary，不发布 PR 评论。
+
+测试代码不计入大小阈值：任意层级的 `test` / `tests` / `__tests__` / `spec` / `specs` / `testdata` 目录，以及文件名匹配 `test.py`、`tests.py`、`test_*.py`、`*_test.*`、`conftest.py`、`*.test.*`、`*.spec.*`、`*_spec.*` 的文件均排除，匹配不区分大小写。`*_test.*` 覆盖 Python、Go、C/C++ 等语言，要求文件名包含 `_test.`，因此 `latest.go`、`contest.py` 仍计入。目录按完整名称匹配，`testing` / `test_utils` / `testdata_support` 等目录仍计入；测试目录内的 fixtures 和辅助文件也排除。`test.py` / `tests.py` 是保留的测试文件名，即使位于 `src/` 下也排除；若文件实际承载生产代码，需要改名才能计入。文档、配置和 CI 脚本仍沿用上述规则计入统计，尚未采用仅允许源码目录的白名单。
+
+日志与 job summary 会列出被排除的测试文件及原因，并通过 `Excluded added lines: N` 展示所有被排除文件的新增行数（包括测试、锁文件、生成代码等）。该值与 `Counted added lines` 合起来反映 Git 可统计的总新增行数；二进制 diff 的行数未知，按 0 处理。测试新增暂不设置单独的阻断阈值。
