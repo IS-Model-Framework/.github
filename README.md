@@ -1,17 +1,16 @@
 # Organization CI Infrastructure
 
-本仓库为 IS-Model-Framework 组织提供可复用的 GitHub Actions 工作流、检查脚本和 pre-commit 配置，覆盖 Python CI、AI Review 处理记录，以及 C/C++ 的本地格式检查。当前 8 个工作流均通过 `workflow_call` 被项目调用；本仓库未定义发布或部署流程。
+本仓库为 IS-Model-Framework 组织提供可复用的 GitHub Actions 工作流、检查脚本和 pre-commit 配置，覆盖 Python CI，以及 C/C++ 的本地格式检查。当前 7 个工作流均通过 `workflow_call` 被项目调用；本仓库未定义发布或部署流程。
 
 ## 目录
 
 | 路径 | 内容 |
 | --- | --- |
-| [.github/workflows/](.github/workflows/) | 完整 Python CI 与 7 个可单独调用的检查工作流 |
+| [.github/workflows/](.github/workflows/) | 完整 Python CI 与 6 个可单独调用的检查工作流 |
 | [scripts/](scripts/) | 提交信息、格式、类型、PR 大小检查及本地安装脚本 |
 | [configs/.pre-commit-config.yaml](configs/.pre-commit-config.yaml) | 组织共享 hooks |
 | [configs/ruff.toml](configs/ruff.toml) | 组织共享 Ruff 规则 |
 | [docs/PRECOMMIT_GUIDE.md](docs/PRECOMMIT_GUIDE.md) | pre-commit 安装、日常使用、项目配置与 CI 接入指南 |
-| [docs/AI_REVIEW_DISPOSITION.md](docs/AI_REVIEW_DISPOSITION.md) | AI Review 合并门禁、回复协议、完成标记与项目接入示例 |
 | [profile/README.md](profile/README.md) | 组织主页介绍，与本仓库的 CI 使用说明分开维护 |
 
 ## 项目接入
@@ -84,7 +83,6 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 | [reusable-type-check.yml](.github/workflows/reusable-type-check.yml) | 对改动的 Python 文件运行 mypy |
 | [reusable-tests.yml](.github/workflows/reusable-tests.yml) | 运行 pytest，生成 JUnit 与覆盖率报告，按参数评论 PR / 上传 Codecov |
 | [reusable-pr-size-check.yml](.github/workflows/reusable-pr-size-check.yml) | 仅在 `pull_request` 事件统计新增行数并输出警告或失败 |
-| [reusable-ai-review-disposition.yml](.github/workflows/reusable-ai-review-disposition.yml) | 独立核验 AI review 完成、明确处理回复及 Resolve，发布 PR head 上的 Check |
 
 完整 CI 的顺序如下：
 
@@ -154,8 +152,6 @@ Python CI 的各子工作流均接受 `python-version`（默认 `'3.11'`），�
 | pr-size-check | `warning-threshold: 300`、`block-threshold: 500` |
 
 `precommit-config-path`、`upload-coverage` 和 `comment-on-pr` 只在对应子工作流暴露，不能直接传给完整 CI。
-
-AI Review Disposition 独立接入，不属于完整 Python CI。它接受必填 `bot-logins`，以及 `pr-number: 0`、`jira-url: ''`、`shared-ref: main`；使用 Python 3.11。[接入指南](docs/AI_REVIEW_DISPOSITION.md) 提供评论触发、fork 权限处理、完成协议和 Required Check 配置。生产环境应将 workflow 引用与 `shared-ref` 固定到同一个审核后的 commit SHA。
 
 ## 检查规则与配置
 
