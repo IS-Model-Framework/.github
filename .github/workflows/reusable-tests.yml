@@ -30,7 +30,7 @@ on:
 jobs:
   comprehensive-tests:
     runs-on: ubuntu-latest
-    name: Comprehensive Tests
+    name: ${{ github.event_name == 'pull_request' && 'PR Tests (Dependency-Aware)' || 'Comprehensive Tests' }}
     
     steps:
     - name: Checkout code
@@ -62,12 +62,12 @@ jobs:
         python -m pip install --upgrade pip
         ${{ inputs.install-command }}
     
-    - name: Run all tests and generate reports
+    - name: Run tests and generate reports
       id: run-tests
       run: |
         export PYTHONPATH="${PYTHONPATH}:$(pwd)"
         # 
-        # 运行所有测试 (unit 和 integration)
+        # 运行项目配置选定的测试 (unit 和 integration)
         # - 生成 pytest.xml 供 PR 评论使用
         # - 生成 coverage.xml 供 Codecov 和 PR 评论使用
         #
