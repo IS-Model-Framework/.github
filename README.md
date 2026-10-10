@@ -81,7 +81,7 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 | [reusable-commit-check.yml](.github/workflows/reusable-commit-check.yml) | 检查 PR head / push after 对应的最新一条提交信息 |
 | [reusable-format-check.yml](.github/workflows/reusable-format-check.yml) | 对改动文件运行 Ruff 格式检查和 git-clang-format |
 | [reusable-type-check.yml](.github/workflows/reusable-type-check.yml) | 对改动的 Python 文件运行 mypy |
-| [reusable-tests.yml](.github/workflows/reusable-tests.yml) | 运行 pytest，生成 JUnit 与覆盖率报告，按参数评论 PR / 上传 Codecov |
+| [reusable-tests.yml](.github/workflows/reusable-tests.yml) | 配置 runner 的 PR 使用依赖选测入口，其余运行全量 pytest；生成 JUnit 与覆盖率报告，按参数评论 PR / 上传 Codecov |
 | [reusable-pr-size-check.yml](.github/workflows/reusable-pr-size-check.yml) | 仅在 `pull_request` 事件统计新增行数并输出警告或失败 |
 
 完整 CI 的顺序如下：
@@ -202,12 +202,13 @@ pytest --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing \
 默认测试发现范围由项目 pytest 配置决定。生成 `coverage.xml` 和 `pytest.xml`，在 PR 上评论覆盖率并上传 Codecov。评论和上传步骤未使用 `always()`，测试失败时不会继续执行它们。
 
 完整 CI 和 tests 子工作流均接受可选的 `pytest-runner`，默认 `''`。
-测试阶段统一保持 **Comprehensive Tests** 名称，以兼容现有分支保护规则。
+配置了入口的 PR 显示 **PR Tests (Dependency-Aware)**；push、其他事件或未配置入口的 PR 显示 **Comprehensive Tests**。
 例如传入 `tools/run_unit_tests.py` 后，PR 运行 `python -- <runner> <原有 pytest 参数>`
 执行选测；push 或未配置入口时运行上面的全量命令。入口文件不存在时回退全量 pytest。
+`Dependency-Aware` 表示启用依赖选测入口，可能执行测试子集，也可能因入口缺失、计划无效或变更范围需要而回退全量；实际范围以执行计划的 `scope` 和 `execution.command` 为准。
 
 仍然只有一个测试阶段：`tests` 的前置检查、`CI Result` 的 `needs.tests.result`
-汇总及 required check 名称保持不变。入口原样返回 pytest 退出码，失败不重试；
+汇总及 **CI Result** 名称保持不变。分支保护建议要求 `CI Result`；若此前直接要求 `Comprehensive Tests`，启用 PR 选测时需同步调整该要求。入口原样返回 pytest 退出码，失败不重试；
 不能同时设置 `skip-tests: true`，否则会跳过测试及其汇总要求。
 
 入口接收环境变量 `PR_BASE_SHA`，可将实际 checkout 的执行计划写到

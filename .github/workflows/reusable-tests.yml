@@ -35,7 +35,9 @@ on:
 jobs:
   comprehensive-tests:
     runs-on: ubuntu-latest
-    name: Comprehensive Tests
+    # A configured PR runner selects tests by dependency and may fall back to full pytest.
+    # The plan records the actual scope; push and unconfigured PRs run full pytest.
+    name: ${{ github.event_name == 'pull_request' && inputs.pytest-runner != '' && 'PR Tests (Dependency-Aware)' || 'Comprehensive Tests' }}
     
     steps:
     - name: Checkout code
