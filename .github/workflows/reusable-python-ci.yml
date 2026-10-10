@@ -3,6 +3,11 @@ name: Reusable - Complete Python CI
 on:
   workflow_call:
     inputs:
+      pytest-runner:
+        description: 'Optional repository Python runner for PR dependency tests'
+        required: false
+        type: string
+        default: ''
       python-version:
         description: 'Python version to use'
         required: false
@@ -112,6 +117,7 @@ jobs:
           !contains(needs.*.result, 'cancelled') }}
     uses: ./.github/workflows/reusable-tests.yml
     with:
+      pytest-runner: ${{ inputs.pytest-runner }}
       python-version: ${{ inputs.python-version || '3.11' }}
       install-command: ${{ inputs.test-install-command || inputs.install-command || 'pip install -e ".[dev]"' }}
     secrets:

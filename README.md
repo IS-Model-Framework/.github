@@ -81,7 +81,7 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 | [reusable-commit-check.yml](.github/workflows/reusable-commit-check.yml) | 检查 PR head / push after 对应的最新一条提交信息 |
 | [reusable-format-check.yml](.github/workflows/reusable-format-check.yml) | 对改动文件运行 Ruff 格式检查和 git-clang-format |
 | [reusable-type-check.yml](.github/workflows/reusable-type-check.yml) | 对改动的 Python 文件运行 mypy |
-| [reusable-tests.yml](.github/workflows/reusable-tests.yml) | 运行 pytest，生成 JUnit 与覆盖率报告，按参数评论 PR / 上传 Codecov |
+| [reusable-tests.yml](.github/workflows/reusable-tests.yml) | 配置 runner 的 PR 使用依赖选测入口，其余运行全量 pytest；生成 JUnit 与覆盖率报告，按参数评论 PR / 上传 Codecov |
 | [reusable-pr-size-check.yml](.github/workflows/reusable-pr-size-check.yml) | 仅在 `pull_request` 事件统计新增行数并输出警告或失败 |
 
 完整 CI 的顺序如下：
@@ -103,6 +103,7 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 | `ruff-config-path` | string | `''` | 独立格式检查使用的 Ruff 配置路径 |
 | `install-command` | string | `pip install -e ".[dev]"` | 格式、类型及默认测试依赖安装命令 |
 | `test-install-command` | string | `''` | 仅覆盖测试安装命令；为空时使用 `install-command` |
+| `pytest-runner` | string | `''` | PR 依赖测试的仓库内 Python 入口；为空或非 PR 时仍运行全量 pytest |
 | `skip-commit-check` | boolean | `false` | 跳过提交信息检查 |
 | `skip-format-check` | boolean | `false` | 跳过独立格式检查；pre-commit 中的 Ruff 仍会运行 |
 | `skip-type-check` | boolean | `false` | 跳过 mypy |
@@ -148,7 +149,7 @@ jobs:
 | commit-check | 无 |
 | format-check | `ruff-config-path: ''`、`install-command: 'pip install -e ".[dev]"'` |
 | type-check | `install-command: 'pip install -e ".[dev]"'` |
-| tests | `install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token` |
+| tests | `pytest-runner: ''`、`install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token` |
 | pr-size-check | `warning-threshold: 300`、`block-threshold: 500` |
 
 `precommit-config-path`、`upload-coverage` 和 `comment-on-pr` 只在对应子工作流暴露，不能直接传给完整 CI。
@@ -198,7 +199,31 @@ pytest --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing \
   --junitxml=pytest.xml -v -s --tb=short
 ```
 
-当前没有自定义测试命令参数，测试发现范围由项目 pytest 配置决定。默认生成 `coverage.xml` 和 `pytest.xml`，在 PR 上评论覆盖率并上传 Codecov；没有 `upload-artifact` 步骤。评论和上传步骤未使用 `always()`，测试失败时不会继续执行它们。
+默认测试发现范围由项目 pytest 配置决定。生成 `coverage.xml` 和 `pytest.xml`，在 PR 上评论覆盖率并上传 Codecov。评论和上传步骤未使用 `always()`，测试失败时不会继续执行它们。
+
+完整 CI 和 tests 子工作流均接受可选的 `pytest-runner`，默认 `''`。
+配置了入口的 PR 显示 **PR Tests (Dependency-Aware)**；push、其他事件或未配置入口的 PR 显示 **Comprehensive Tests**。
+例如传入 `tools/run_unit_tests.py` 后，PR 运行 `python -- <runner> <原有 pytest 参数>`
+执行选测；push 或未配置入口时运行上面的全量命令。入口文件不存在时回退全量 pytest。
+`Dependency-Aware` 表示启用依赖选测入口，可能执行测试子集，也可能因入口缺失、计划无效或变更范围需要而回退全量；实际范围以执行计划的 `scope` 和 `execution.command` 为准。
+
+仍然只有一个测试阶段：`tests` 的前置检查、`CI Result` 的 `needs.tests.result`
+汇总及 **CI Result** 名称保持不变。分支保护建议要求 `CI Result`；若此前直接要求 `Comprehensive Tests`，启用 PR 选测时需同步调整该要求。入口原样返回 pytest 退出码，失败不重试；
+不能同时设置 `skip-tests: true`，否则会跳过测试及其汇总要求。
+
+入口接收环境变量 `PR_BASE_SHA`，可将实际 checkout 的执行计划写到
+`PYTEST_PLAN_PATH`。配置入口的 PR 会在测试结束后尝试上传
+`core-dependency-tests-<attempt>`（计划、可选的候选映射、JUnit、覆盖率），缺失文件只警告。
+PallasKernels 的 runner 在同一测试阶段打印选测计划并生成候选映射，
+不再使用独立的 observation job；候选生成失败不阻断 pytest。
+覆盖率评论和 Codecov 流程保持原样，但选测后的 PR 覆盖率代表本次选中范围。
+
+先合入共享工作流的新参数，再启用项目调用；回滚时删除项目的 `pytest-runner`
+参数即可恢复原测试阶段的全量执行。可本地验证分流与失败传递：
+
+```bash
+python -m pytest tests/test_pytest_runner_workflow.py -q
+```
 
 ### PR 大小
 
