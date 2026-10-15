@@ -1,0 +1,34 @@
+# Copy to each project's .github/workflows/ai-review-disposition.yml.
+# Both this file and the event collector must exist on the default branch.
+name: AI Review Disposition
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: [AI Review Events]
+    types: [completed]
+  issue_comment:
+    types: [created, edited, deleted]
+  repository_dispatch:
+    types: [ai-review-state-changed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: write
+
+jobs:
+  disposition:
+    if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request }}
+    uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
+    with:
+      # Set this repository/organization variable to exact bot logins.
+      bot-logins: ${{ vars.AI_REVIEW_BOTS }}
+      jira-url: ${{ vars.AI_REVIEW_JIRA_URL }}
+      shared-ref: main
+    # If the shared CI repository is private:
+    # secrets:
+    #   shared-read-token: ${{ secrets.CI_READ_TOKEN }}

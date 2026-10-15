@@ -1,0 +1,70 @@
+name: Reusable - AI Review Disposition
+
+on:
+  workflow_call:
+    inputs:
+      bot-logins:
+        description: 'Comma-separated GitHub logins; every bot must complete review'
+        required: true
+        type: string
+      pr-number:
+        description: 'PR to check; 0 checks all open PRs in the caller repository'
+        required: false
+        type: number
+        default: 0
+      jira-url:
+        description: 'Optional trusted Jira base URL, e.g. https://example.atlassian.net'
+        required: false
+        type: string
+        default: ''
+      shared-ref:
+        description: 'Trusted revision of this repository; pin alongside workflow uses'
+        required: false
+        type: string
+        default: main
+    secrets:
+      shared-read-token:
+        description: 'Optional read-only token for checkout when shared CI repo is private'
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: write
+
+jobs:
+  disposition:
+    name: Evaluate AI Review Dispositions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # All scans for a repository must serialize. Pending scans may be coalesced;
+    # each scan reads live state for every open PR, not an event snapshot.
+    concurrency:
+      group: ai-review-disposition-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+    - name: Checkout trusted shared scripts
+      uses: actions/checkout@v4
+      with:
+        repository: IS-Model-Framework/.github
+        token: ${{ secrets.shared-read-token || github.token }}
+        ref: ${{ inputs.shared-ref }}
+        path: .ci-shared
+        persist-credentials: false
+        sparse-checkout: scripts
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Publish check on each PR head commit
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
+        AI_REVIEW_JIRA_URL: ${{ inputs.jira-url }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        python .ci-shared/scripts/check_ai_review_disposition.py \
+          --pr-number "$PR_NUMBER"
