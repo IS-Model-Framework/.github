@@ -109,8 +109,8 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 | `skip-type-check` | boolean | `false` | 跳过 mypy |
 | `skip-tests` | boolean | `false` | 跳过 pytest |
 | `skip-pr-size-check` | boolean | `false` | 跳过 PR 大小检查 |
-| `pr-size-warning-threshold` | number | `300` | 计入的新增行数严格大于该值时警告 |
-| `pr-size-block-threshold` | number | `500` | 计入的新增行数严格大于该值时 PR size job 失败 |
+| `pr-size-warning-threshold` | number | `200` | 计入的新增行数严格大于该值时警告 |
+| `pr-size-block-threshold` | number | `300` | 计入的新增行数严格大于该值时 PR size job 失败 |
 
 完整 CI 使用 `||` 回退默认值，大小阈值传入 `0` 时也会回退到默认值。警告阈值必须小于阻断阈值。
 
@@ -150,7 +150,7 @@ jobs:
 | format-check | `ruff-config-path: ''`、`install-command: 'pip install -e ".[dev]"'` |
 | type-check | `install-command: 'pip install -e ".[dev]"'` |
 | tests | `pytest-runner: ''`、`install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token` |
-| pr-size-check | `warning-threshold: 300`、`block-threshold: 500` |
+| pr-size-check | `warning-threshold: 200`、`block-threshold: 300` |
 
 `precommit-config-path`、`upload-coverage` 和 `comment-on-pr` 只在对应子工作流暴露，不能直接传给完整 CI。
 
@@ -227,10 +227,10 @@ python -m pytest tests/test_pytest_runner_workflow.py -q
 
 ### PR 大小
 
-[check_pr_size.py](scripts/check_pr_size.py) 使用 `git diff --numstat base...head`，统计相对于 merge-base 的新增行数，不以删除行抵消新增行。默认 `301–500` 行警告，`501` 行及以上失败，非 PR 事件不执行统计。
+[check_pr_size.py](scripts/check_pr_size.py) 使用 `git diff --numstat base...head`，统计相对于 merge-base 的新增行数，不以删除行抵消新增行。默认 `201–300` 行警告，`301` 行及以上失败，非 PR 事件不执行统计。
 
 排除范围包括脚本列出的锁文件、`generated` / `__generated__` / `vendor` / `node_modules` / `build` / `dist` / `.venv` 目录、压缩前端文件及 source map、二进制 diff，以及指定静态资源扩展名（包括 SVG、PDF）。完整清单以脚本常量为准。结果写入日志和 Actions job summary，不发布 PR 评论。
 
-测试代码不计入大小阈值：任意层级的 `test` / `tests` / `__tests__` / `spec` / `specs` / `testdata` 目录，以及文件名匹配 `test.py`、`tests.py`、`test_*.py`、`*_test.*`、`conftest.py`、`*.test.*`、`*.spec.*`、`*_spec.*` 的文件均排除，匹配不区分大小写。`*_test.*` 覆盖 Python、Go、C/C++ 等语言，要求文件名包含 `_test.`，因此 `latest.go`、`contest.py` 仍计入。目录按完整名称匹配，`testing` / `test_utils` / `testdata_support` 等目录仍计入；测试目录内的 fixtures 和辅助文件也排除。`test.py` / `tests.py` 是保留的测试文件名，即使位于 `src/` 下也排除；若文件实际承载生产代码，需要改名才能计入。文档、配置和 CI 脚本仍沿用上述规则计入统计，尚未采用仅允许源码目录的白名单。
+测试代码不计入大小阈值：任意层级的 `test` / `tests` / `__tests__` / `spec` / `specs` / `testdata` 目录，以及文件名匹配 `test.py`、`tests.py`、`test_*.py`、`*_test.*`、`conftest.py`、`*.test.*`、`*.spec.*`、`*_spec.*` 的文件均排除，匹配不区分大小写。`*_test.*` 覆盖 Python、Go、C/C++ 等语言，要求文件名包含 `_test.`，因此 `latest.go`、`contest.py` 仍计入。目录按完整名称匹配，`testing` / `test_utils` / `testdata_support` 等目录仍计入；测试目录内的 fixtures 和辅助文件也排除。`test.py` / `tests.py` 是保留的测试文件名，即使位于 `src/` 下也排除；若文件实际承载生产代码，需要改名才能计入。任意目录下的 `.md` 文件也排除，匹配不区分大小写；其他文档、配置和 CI 脚本仍沿用上述规则计入统计，尚未采用仅允许源码目录的白名单。
 
 日志与 job summary 会列出被排除的测试文件及原因，并通过 `Excluded added lines: N` 展示所有被排除文件的新增行数（包括测试、锁文件、生成代码等）。该值与 `Counted added lines` 合起来反映 Git 可统计的总新增行数；二进制 diff 的行数未知，按 0 处理。测试新增暂不设置单独的阻断阈值。
