@@ -39,7 +39,6 @@ jobs:
             || fromJSON(github.event.workflow_run.display_title || '0') }}
       # Set this repository/organization variable to exact bot logins.
       bot-logins: ${{ vars.AI_REVIEW_BOTS }}
-      jira-url: ${{ vars.AI_REVIEW_JIRA_URL }}
       shared-ref: main
     # If the shared CI repository is private:
     # secrets:

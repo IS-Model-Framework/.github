@@ -11,11 +11,6 @@ on:
         description: 'Positive PR number to check in the caller repository'
         required: true
         type: number
-      jira-url:
-        description: 'Optional trusted Jira base URL, e.g. https://example.atlassian.net'
-        required: false
-        type: string
-        default: ''
       shared-ref:
         description: 'Trusted revision of this repository; pin alongside workflow uses'
         required: false
@@ -61,7 +56,6 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
-        AI_REVIEW_JIRA_URL: ${{ inputs.jira-url }}
         PR_NUMBER: ${{ inputs.pr-number }}
       run: |
         python .ci-shared/scripts/check_ai_review_disposition.py \

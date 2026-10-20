@@ -4,6 +4,7 @@ import json
 import sys
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from scripts.check_ai_review_disposition import (
   CHECK_NAME,
@@ -15,7 +16,6 @@ from scripts.check_ai_review_disposition import (
   passed,
   snapshot,
   summary,
-  tracking_target,
 )
 
 HEAD = "a" * 40
@@ -256,27 +256,6 @@ class PolicyTests(unittest.TestCase):
     self.assertIn("unresolved requirements: 1", report)
     self.assertIn("| 1 | 0 | 0 | 0 | 0 |", report)
 
-  def test_tracking_urls_are_bound_to_trusted_hosts(self):
-    self.assertEqual(
-      tracking_target(
-        "https://github.com/org/repo/issues/42", "https://github.com", ""
-      ),
-      ("github", "org", "repo", "42"),
-    )
-    self.assertIsNotNone(
-      tracking_target(
-        "https://jira.test/browse/PROJ-42", "https://github.com", "https://jira.test"
-      )
-    )
-    for url in (
-      "http://jira.test/browse/PROJ-42",
-      "https://jira.test.evil/browse/PROJ-42",
-      "https://github.com/org/repo/pull/42",
-      "https://github.com/org/repo/issues/42?redirect=1",
-      "https://user@github.com/org/repo/issues/42",
-    ):
-      self.assertIsNone(tracking_target(url, "https://github.com", "https://jira.test"))
-
 
 class ApiTests(unittest.TestCase):
   def test_http_client_reads_and_writes_github_json(self):
@@ -411,6 +390,62 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
 
+  def test_deferred_requires_a_successful_open_issue_lookup(self):
+    data = fixture(
+      "Disposition: Deferred\nReason: Follow up\n"
+      "Tracking: https://github.com/org/repo/issues/42"
+    )
+    calls, ok = self.run_check([data, copy.deepcopy(data)], {"state": "open"})
+    self.assertTrue(ok)
+    self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
+    self.assertEqual(calls[-1].args[2]["conclusion"], "success")
+
+  def test_missing_unreadable_or_failed_issue_lookup_blocks_deferred(self):
+    data = fixture(
+      "Disposition: Deferred\nReason: Follow up\n"
+      "Tracking: https://github.com/org/repo/issues/42"
+    )
+    for status in (404, 401, 403, 429, 500):
+      with self.subTest(status=status):
+        error = HTTPError("https://api.github.com/issue", status, "error", {}, None)
+        calls, ok = self.run_check([data], error)
+        self.assertFalse(ok)
+        self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
+        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+
+  def test_only_canonical_github_issue_urls_are_queried(self):
+    for url in (
+      "https://jira.test/browse/PROJ-42",
+      "https://github.com.evil/org/repo/issues/42",
+      "http://github.com/org/repo/issues/42",
+      "https://github.com/org/repo/pull/42",
+      "https://github.com/org/repo/issues/0",
+      "https://github.com/org/repo/issues/42?redirect=1",
+      "https://github.com/org/repo/issues/42#issuecomment-1",
+      "https://user@github.com/org/repo/issues/42",
+      "PROJ-42",
+    ):
+      with self.subTest(url=url):
+        data = fixture(f"Disposition: Deferred\nReason: Follow up\nTracking: {url}")
+        calls, ok = self.run_check([data])
+        self.assertFalse(ok)
+        # Only PR metadata, Check creation, and Check completion; no issue request.
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+
+  def test_multiple_findings_share_one_issue_lookup(self):
+    data = fixture(
+      "Disposition: Deferred\nReason: Follow up\n"
+      "Tracking: https://github.com/org/repo/issues/42"
+    )
+    other = copy.deepcopy(data["threads"][0])
+    other["id"] = "thread-2"
+    data["threads"].append(other)
+    calls, ok = self.run_check([data, copy.deepcopy(data)], {"state": "open"})
+    self.assertTrue(ok)
+    issue_reads = [c for c in calls if c.args[:2] == ("GET", "/repos/org/repo/issues/42")]
+    self.assertEqual(len(issue_reads), 1)
+
   def run_check(self, snapshots, issue=None):
     api = GitHub("test-token")
     pr = {"head": {"sha": HEAD}, "state": "open"}
@@ -424,7 +459,7 @@ class ApiTests(unittest.TestCase):
       patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}),
       patch("builtins.print"),
     ):
-      ok = check_pr(api, "org/repo", 128, {BOT}, "https://github.com", "")
+      ok = check_pr(api, "org/repo", 128, {BOT})
       return request.call_args_list, ok
 
 
@@ -446,7 +481,7 @@ class MainTests(unittest.TestCase):
     self.assertEqual(code, 0)
     client.assert_called_once_with("test-token")
     check.assert_called_once_with(
-      client.return_value, "org/repo", 313, {BOT}, "https://github.com", ""
+      client.return_value, "org/repo", 313, {BOT}
     )
     client.return_value.open_prs.assert_not_called()
 
@@ -469,10 +504,13 @@ class MainTests(unittest.TestCase):
   def test_closed_pr_does_not_create_a_check(self):
     api = GitHub("test-token")
     with patch.object(api, "request", return_value={"state": "closed"}) as request:
-      self.assertTrue(
-        check_pr(api, "org/repo", 313, {BOT}, "https://github.com", "")
-      )
+      self.assertTrue(check_pr(api, "org/repo", 313, {BOT}))
     request.assert_called_once_with("GET", "/repos/org/repo/pulls/313")
+
+  def test_removed_jira_option_is_not_accepted(self):
+    with self.assertRaises(SystemExit) as error:
+      self.run_main("--pr-number", "313", "--jira-url", "https://jira.test")
+    self.assertEqual(error.exception.code, 2)
 
 
 if __name__ == "__main__":

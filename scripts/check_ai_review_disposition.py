@@ -8,7 +8,7 @@ import re
 import sys
 from collections import Counter
 from urllib.error import HTTPError
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 CHECK_NAME = "AI Review / Disposition Check"
@@ -159,31 +159,6 @@ def parse_disposition(body):
   return fields
 
 
-def tracking_target(value, server_url, jira_url):
-  server = urlparse(server_url)
-  target = urlparse(value)
-  if target.query or target.fragment or target.username or target.password:
-    return None
-  if target.scheme == server.scheme and target.netloc == server.netloc:
-    prefix = server.path.rstrip("/")
-    match = re.fullmatch(
-      re.escape(prefix) + r"/([\w.-]+)/([\w.-]+)/issues/([1-9]\d*)", target.path
-    )
-    if match:
-      return ("github", *match.groups())
-  if jira_url:
-    jira = urlparse(jira_url.rstrip("/"))
-    if (
-      target.scheme == "https"
-      and target.netloc == jira.netloc
-      and re.fullmatch(
-        re.escape(jira.path) + r"/browse/[A-Z][A-Z0-9_]*-[1-9]\d*", target.path
-      )
-    ):
-      return ("jira", value)
-  return None
-
-
 def evaluate(data, bots, authorized, tracking_valid):
   """Pure policy; API-dependent identity and tracking checks are supplied by caller."""
   errors = []
@@ -256,7 +231,7 @@ def evaluate(data, bots, authorized, tracking_valid):
           reason = "Fix must be a full commit SHA in the current PR"
       elif not reason and status == "Deferred":
         if not tracking_valid(fields.get("tracking", "")):
-          reason = "Tracking must reference an open GitHub issue or configured Jira URL"
+          reason = "Tracking must reference an existing, readable, open GitHub issue"
       if not reason and not thread["isResolved"]:
         reason = "Disposition is valid; resolve the conversation"
     findings.append({
@@ -296,7 +271,7 @@ def summary(number, head, result):
   return "\n".join(lines)
 
 
-def check_pr(api, repository, number, bots, server_url, jira_url):
+def check_pr(api, repository, number, bots):
   pr = api.request("GET", f"/repos/{repository}/pulls/{number}")
   if pr["state"] != "open":
     return True
@@ -326,14 +301,14 @@ def check_pr(api, repository, number, bots, server_url, jira_url):
 
   def tracking_valid(value):
     if value not in tracking:
-      target = tracking_target(value, server_url, jira_url)
+      match = re.fullmatch(
+        r"https://github\.com/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*)",
+        value,
+      )
       valid = False
-      if target and target[0] == "jira":
-        valid = True
-      elif target:
-        _, owner, name, issue = target
+      if match:
         try:
-          item = api.request("GET", f"/repos/{owner}/{name}/issues/{issue}")
+          item = api.request("GET", f"/repos/{match[1]}")
           valid = item["state"] == "open" and "pull_request" not in item
         except HTTPError as error:
           if error.code != 404:
@@ -382,7 +357,6 @@ def main():
   parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
   parser.add_argument("--pr-number", type=int, required=True, help="PR to check")
   parser.add_argument("--bots", default=os.environ.get("AI_REVIEW_BOTS", ""))
-  parser.add_argument("--jira-url", default=os.environ.get("AI_REVIEW_JIRA_URL", ""))
   args = parser.parse_args()
   bots = {bot.strip().lower() for bot in args.bots.split(",") if bot.strip()}
   token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
@@ -397,14 +371,8 @@ def main():
     parser.error(
       "Valid repository, nonempty bot logins, PR number > 0 and token required"
     )
-  if args.jira_url:
-    jira = urlparse(args.jira_url)
-    if jira.scheme != "https" or not jira.netloc or jira.query or jira.fragment:
-      parser.error("Jira URL must be an HTTPS base URL")
   api = GitHub(token)
-  ok = check_pr(
-    api, args.repository, args.pr_number, bots, "https://github.com", args.jira_url
-  )
+  ok = check_pr(api, args.repository, args.pr_number, bots)
   return 0 if ok else 1
 
 

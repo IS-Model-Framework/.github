@@ -25,9 +25,9 @@ Bot 由精确 GitHub login 匹配，例如 `reviewer[bot]`；不根据显示名�
 | Accepted | `Reason`、`Fix` | 完整的 40 位 commit SHA，必须仍在当前 PR 的 commits 中 |
 | Rejected | `Reason` | 非空拒绝理由 |
 | Invalid | `Reason` | 非空误报理由 |
-| Deferred | `Reason`、`Tracking` | 存在且开放的 GitHub Issue，或指定 Jira 域名下的 ticket URL |
+| Deferred | `Reason`、`Tracking` | GitHub API 确认存在、当前 token 可读且仍开放的 Issue，不能是 PR |
 
-`Fix` 证明提交引用有效；工具不判断该提交是否真正修复问题。理由的充分性、Jira ticket 的存在与状态，以及 deferral 的业务可接受性由 Human Review 审查。当前版本不支持无 tracking 的口头豁免；若未来接入审批，应验证审批人的身份及审批记录，而不是接受 Contributor 自填 `Approved: yes`。
+`Fix` 证明提交引用有效；工具不判断该提交是否真正修复问题。理由的充分性、跟踪 Issue 是否确实覆盖此条意见，以及 deferral 的业务可接受性由 Human Review 审查。当前版本不支持无 tracking 的口头豁免；若未来接入审批，应验证审批人的身份及审批记录，而不是接受 Contributor 自填 `Approved: yes`。
 
 ## Contributor 回复格式
 
@@ -63,7 +63,7 @@ Reason: 本次先完成兼容修复，性能优化在后续版本处理。
 Tracking: https://github.com/IS-Model-Framework/example/issues/42
 ```
 
-配置 `AI_REVIEW_JIRA_URL=https://example.atlassian.net` 后，也接受 `Tracking: https://example.atlassian.net/browse/PROJ-123`。不接受任意 HTTPS 链接、裸 ticket 编号或 PR 链接。GitHub Issue 需要当前 token 可读取；其他仓库的私有 Issue 可能需要 GitHub App installation token。
+`Tracking` 只接受 `https://github.com/owner/repo/issues/number` 形式的完整 Issue 链接，不接受其他站点、裸编号、PR 链接、查询参数或锚点。检查器会实际调用 GitHub Issues API；不存在、已关闭、无法读取的 Issue，以及限流、鉴权或服务错误都不会通过。允许引用其他仓库的 Issue，但当前 token 必须能读取；其他仓库的私有 Issue 可能需要 GitHub App installation token。
 
 采用最新编辑时间的明确 disposition 回复；同一时间取 thread 中更后的回复。新的不完整 disposition 会替代旧的有效回复，避免沿用过期决定。普通交流回复不会替代 disposition。AI 编辑 finding 或追加 inline 回复后，需要重新确认 disposition，并重新提交完成 review 的标记。修复提交被 force-push 移出 PR 后，Accepted 失效。
 
@@ -90,7 +90,7 @@ Bot 的 review 流程必须遵守：
 `.github` 仓库的 workflow 不会自动在所有组织项目执行。每个目标项目需要 caller workflow，并由组织 ruleset 覆盖目标仓库。
 
 1. 将 [ai-review-events.yml](examples/ai-review-events.yml) 与 [ai-review-disposition.yml](examples/ai-review-disposition.yml) 配套复制到目标项目 `.github/workflows/`，合入默认分支。collector 的 `run-name` 必须保持为 PR 编号，供后续 `workflow_run` 定位目标；不要改成 PR 标题。迁移期间旧 collector 的历史运行不符合新格式，可通过手动指定 PR 复查。
-2. 在组织/仓库 Variables 设置 `AI_REVIEW_BOTS` 为准确的 login 列表，逗号分隔。需要 Jira 时设置 `AI_REVIEW_JIRA_URL`。示例中的 Bot 名称不是实际默认配置。
+2. 在组织/仓库 Variables 设置 `AI_REVIEW_BOTS` 为准确的 login 列表，逗号分隔。示例中的 Bot 名称不是实际默认配置。
 3. 生产环境将 caller 的 `uses: ...@main` 与 `shared-ref: main` 同时固定到本仓库同一个已审核 commit SHA。共享脚本从可信 CI 仓库加载，完全不 checkout PR 代码。
 4. 为 `GITHUB_TOKEN` 提供 `contents: read`、`pull-requests: read`、`issues: read`、`checks: write`。如果组织 CI 仓库是 private，还需要开启 reusable workflow 的组织访问，并通过可选 secret `shared-read-token` 提供 CI 仓库的只读 checkout token；caller 的 `GITHUB_TOKEN` 不会自动获得其他 private 仓库的读取权限。
 5. 完成一次运行后，将 **`AI Review / Disposition Check`** 加入 ruleset 的 Required Status Checks，检查来源选择 GitHub Actions。保持现有 Human Review / approval 规则。
@@ -154,7 +154,7 @@ GitHub 的 Status Check 仍是异步状态，无法把“读所有评论”和�
 python -m unittest discover -s scripts/tests -v
 ```
 
-测试覆盖处理状态、回复权限、完成协议、outdated/resolved threads、force-push、分页、API 错误与读取期间新增 findings，以及单 PR CLI、拒绝缺失/非法编号、closed PR 跳过和 HTTP JSON 读写。API 通过 mock 验证；仍需在目标仓库做一次真实的 Bot Review → 回复 → Resolve → 复查 → Required Check 试运行。
+测试覆盖处理状态、回复权限、完成协议、outdated/resolved threads、force-push、分页、API 错误与读取期间新增 findings，以及单 PR CLI、拒绝缺失/非法编号、closed PR 跳过、HTTP JSON 读写和跟踪 Issue 的真实存在性校验路径。API 通过 mock 验证；仍需在目标仓库做一次真实的 Bot Review → 回复 → Resolve → 复查 → Required Check 试运行。
 
 - [GitHub Actions 事件与 fork / workflow_run 行为](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
 - [Webhook 事件：pull_request_review_thread](https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request_review_thread)
