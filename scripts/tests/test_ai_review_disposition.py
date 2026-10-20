@@ -308,7 +308,7 @@ class ApiTests(unittest.TestCase):
       )
       self.assertEqual(
         api.request(
-          "PATCH", "/repos/org/repo/check-runs/99", {"output": {"summary": "���ͨ��"}}
+          "PATCH", "/repos/org/repo/check-runs/99", {"output": {"summary": "检查通过"}}
         ),
         {"conclusion": "success"},
       )
@@ -328,7 +328,7 @@ class ApiTests(unittest.TestCase):
       {"query": "query { viewer { login } }", "variables": {}},
     )
     self.assertEqual(json.loads(calls[2].data), {"head_sha": HEAD})
-    self.assertEqual(json.loads(calls[3].data)["output"]["summary"], "���ͨ��")
+    self.assertEqual(json.loads(calls[3].data)["output"]["summary"], "检查通过")
     self.assertTrue(
       all(r.get_header("Authorization") == "Bearer test-token" for r in calls)
     )

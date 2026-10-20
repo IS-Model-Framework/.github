@@ -276,7 +276,7 @@ def summary(number, head, result):
   counts = Counter(f["status"] for f in result["findings"])
   remaining = sum(bool(f["error"]) for f in result["findings"])
   lines = [
-    f"## PR #{number} �� AI Review Disposition",
+    f"## PR #{number} · AI Review Disposition",
     "",
     f"Head: `{head}`",
     "",
