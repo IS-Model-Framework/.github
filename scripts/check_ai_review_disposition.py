@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check AI review completion and explicit dispositions without running PR code."""
+"""Check one PR's AI review completion and dispositions without running PR code."""
 
 import argparse
 import json
@@ -30,20 +30,17 @@ def actor_login(author):
 
 
 class GitHub:
-  def __init__(self, token, api_url):
+  def __init__(self, token):
     self.token = token
-    self.api_url = api_url.rstrip("/")
-    self.graphql_url = (
-      "https://api.github.com/graphql"
-      if self.api_url == "https://api.github.com"
-      else self.api_url.removesuffix("/v3") + "/graphql"
-    )
 
   def request(self, method, path, body=None):
-    url = self.graphql_url if path == "graphql" else self.api_url + path
+    data = None
+    if body is not None:
+      data = json.dumps(body).encode("utf-8")
+
     request = Request(
-      url,
-      data=json.dumps(body).encode() if body is not None else None,
+      "https://api.github.com" + path,
+      data=data,
       method=method,
       headers={
         "Authorization": f"Bearer {self.token}",
@@ -55,7 +52,7 @@ class GitHub:
       return json.load(response)
 
   def graphql(self, query, variables):
-    result = self.request("POST", "graphql", {"query": query, "variables": variables})
+    result = self.request("POST", "/graphql", {"query": query, "variables": variables})
     if result.get("errors"):
       raise RuntimeError("GitHub GraphQL returned errors; refusing partial data")
     return result["data"]
@@ -86,7 +83,7 @@ class GitHub:
       cursor = page["pageInfo"]["endCursor"]
 
   def comments(self, thread):
-    page = thread.pop("comments")
+    page = thread["comments"]
     comments = list(page["nodes"])
     while page["pageInfo"]["hasNextPage"]:
       query = f"""
@@ -104,17 +101,6 @@ class GitHub:
       page = data["node"]["comments"]
       comments.extend(page["nodes"])
     return comments
-
-  def open_prs(self, repository):
-    page = 1
-    while True:
-      pulls = self.request(
-        "GET", f"/repos/{repository}/pulls?state=open&per_page=100&page={page}"
-      )
-      yield from (pr["number"] for pr in pulls)
-      if len(pulls) < 100:
-        return
-      page += 1
 
 
 def snapshot(api, repository, number):
@@ -290,7 +276,7 @@ def summary(number, head, result):
   counts = Counter(f["status"] for f in result["findings"])
   remaining = sum(bool(f["error"]) for f in result["findings"])
   lines = [
-    f"## PR #{number} · AI Review Disposition",
+    f"## PR #{number} �� AI Review Disposition",
     "",
     f"Head: `{head}`",
     "",
@@ -394,7 +380,7 @@ def check_pr(api, repository, number, bots, server_url, jira_url):
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
-  parser.add_argument("--pr-number", type=int, default=0, help="0: all open PRs")
+  parser.add_argument("--pr-number", type=int, required=True, help="PR to check")
   parser.add_argument("--bots", default=os.environ.get("AI_REVIEW_BOTS", ""))
   parser.add_argument("--jira-url", default=os.environ.get("AI_REVIEW_JIRA_URL", ""))
   args = parser.parse_args()
@@ -405,33 +391,21 @@ def main():
     or any(not re.fullmatch(r"[a-z0-9-]+(?:\[bot\])?", bot) for bot in bots)
     or not args.repository
     or not re.fullmatch(r"[\w.-]+/[\w.-]+", args.repository)
-    or args.pr_number < 0
+    or args.pr_number <= 0
     or not token
   ):
     parser.error(
-      "Valid repository, nonempty bot logins, PR number >= 0 and token required"
+      "Valid repository, nonempty bot logins, PR number > 0 and token required"
     )
   if args.jira_url:
     jira = urlparse(args.jira_url)
     if jira.scheme != "https" or not jira.netloc or jira.query or jira.fragment:
       parser.error("Jira URL must be an HTTPS base URL")
-  api = GitHub(token, os.environ.get("GITHUB_API_URL", "https://api.github.com"))
-  numbers = [args.pr_number] if args.pr_number else api.open_prs(args.repository)
-  success = True
-  for number in numbers:
-    # Keep checking other PRs when one has unaddressed findings.
-    success = (
-      check_pr(
-        api,
-        args.repository,
-        number,
-        bots,
-        os.environ.get("GITHUB_SERVER_URL", "https://github.com"),
-        args.jira_url,
-      )
-      and success
-    )
-  return 0 if success else 1
+  api = GitHub(token)
+  ok = check_pr(
+    api, args.repository, args.pr_number, bots, "https://github.com", args.jira_url
+  )
+  return 0 if ok else 1
 
 
 if __name__ == "__main__":

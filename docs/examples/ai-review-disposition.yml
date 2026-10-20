@@ -13,6 +13,11 @@ on:
   repository_dispatch:
     types: [ai-review-state-changed]
   workflow_dispatch:
+    inputs:
+      pr-number:
+        description: 'Positive PR number to recheck'
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -25,6 +30,13 @@ jobs:
     if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request }}
     uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
     with:
+      # Collector run-name is the PR number, even when workflow_run.pull_requests is empty.
+      pr-number: >-
+        ${{ github.event.pull_request.number
+            || github.event.issue.number
+            || inputs.pr-number
+            || github.event.client_payload.pr_number
+            || fromJSON(github.event.workflow_run.display_title || '0') }}
       # Set this repository/organization variable to exact bot logins.
       bot-logins: ${{ vars.AI_REVIEW_BOTS }}
       jira-url: ${{ vars.AI_REVIEW_JIRA_URL }}

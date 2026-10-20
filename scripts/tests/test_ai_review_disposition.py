@@ -1,4 +1,7 @@
 import copy
+import io
+import json
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +10,7 @@ from scripts.check_ai_review_disposition import (
   GitHub,
   check_pr,
   evaluate,
+  main,
   parse_disposition,
   passed,
   snapshot,
@@ -275,8 +279,62 @@ class PolicyTests(unittest.TestCase):
 
 
 class ApiTests(unittest.TestCase):
+  def test_http_client_reads_and_writes_github_json(self):
+    api = GitHub("test-token")
+    calls = []
+    responses = [
+      {"number": 313},
+      {"data": {"viewer": {"login": "reviewer"}}},
+      {"id": 99},
+      {"conclusion": "success"},
+    ]
+
+    def respond(request, timeout):
+      self.assertEqual(timeout, 30)
+      calls.append(request)
+      return io.BytesIO(json.dumps(responses[len(calls) - 1]).encode())
+
+    with patch("scripts.check_ai_review_disposition.urlopen", side_effect=respond):
+      self.assertEqual(
+        api.request("GET", "/repos/org/repo/pulls/313"), {"number": 313}
+      )
+      self.assertEqual(
+        api.graphql("query { viewer { login } }", {}),
+        {"viewer": {"login": "reviewer"}},
+      )
+      self.assertEqual(
+        api.request("POST", "/repos/org/repo/check-runs", {"head_sha": HEAD}),
+        {"id": 99},
+      )
+      self.assertEqual(
+        api.request(
+          "PATCH", "/repos/org/repo/check-runs/99", {"output": {"summary": "���ͨ��"}}
+        ),
+        {"conclusion": "success"},
+      )
+    self.assertEqual([r.get_method() for r in calls], ["GET", "POST", "POST", "PATCH"])
+    self.assertEqual(
+      [r.full_url for r in calls],
+      [
+        "https://api.github.com/repos/org/repo/pulls/313",
+        "https://api.github.com/graphql",
+        "https://api.github.com/repos/org/repo/check-runs",
+        "https://api.github.com/repos/org/repo/check-runs/99",
+      ],
+    )
+    self.assertIsNone(calls[0].data)
+    self.assertEqual(
+      json.loads(calls[1].data),
+      {"query": "query { viewer { login } }", "variables": {}},
+    )
+    self.assertEqual(json.loads(calls[2].data), {"head_sha": HEAD})
+    self.assertEqual(json.loads(calls[3].data)["output"]["summary"], "���ͨ��")
+    self.assertTrue(
+      all(r.get_header("Authorization") == "Bearer test-token" for r in calls)
+    )
+
   def test_connections_read_more_than_100_nodes(self):
-    api = GitHub("test-token", "https://api.github.com")
+    api = GitHub("test-token")
     pages = [
       {
         "nodes": list(range(100)),
@@ -290,7 +348,7 @@ class ApiTests(unittest.TestCase):
       self.assertEqual(graphql.call_args.args[1]["cursor"], "next")
 
   def test_long_thread_comments_are_paginated(self):
-    api = GitHub("test-token", "https://api.github.com")
+    api = GitHub("test-token")
     thread = {
       "id": "thread-1",
       "comments": {
@@ -300,16 +358,19 @@ class ApiTests(unittest.TestCase):
     }
     page = {"nodes": [100], "pageInfo": {"hasNextPage": False, "endCursor": None}}
     with patch.object(api, "graphql", return_value={"node": {"comments": page}}):
-      self.assertEqual(api.comments(thread)[-1], 100)
+      comments = api.comments(thread)
+    self.assertEqual(len(comments), 101)
+    self.assertEqual(comments[-1], 100)
+    self.assertEqual(len(thread["comments"]["nodes"]), 100)
 
   def test_graphql_errors_reject_partial_data(self):
-    api = GitHub("test-token", "https://api.github.com")
+    api = GitHub("test-token")
     with patch.object(api, "request", return_value={"data": {}, "errors": [{}]}):
       with self.assertRaises(RuntimeError):
         api.graphql("query", {})
 
   def test_snapshot_rejects_head_change_during_read(self):
-    api = GitHub("test-token", "https://api.github.com")
+    api = GitHub("test-token")
     before = {"head": {"sha": HEAD}, "user": {"login": "contributor"}, "state": "open"}
     after = {**before, "head": {"sha": FIX}}
     with (
@@ -351,7 +412,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
 
   def run_check(self, snapshots, issue=None):
-    api = GitHub("test-token", "https://api.github.com")
+    api = GitHub("test-token")
     pr = {"head": {"sha": HEAD}, "state": "open"}
     responses = [pr, {"id": 99}]
     if issue is not None:
@@ -365,6 +426,53 @@ class ApiTests(unittest.TestCase):
     ):
       ok = check_pr(api, "org/repo", 128, {BOT}, "https://github.com", "")
       return request.call_args_list, ok
+
+
+class MainTests(unittest.TestCase):
+  def run_main(self, *arguments, passed=True):
+    with (
+      patch.dict("os.environ", {"GH_TOKEN": "test-token"}, clear=True),
+      patch.object(
+        sys, "argv", ["checker", "--repository", "org/repo", "--bots", BOT, *arguments]
+      ),
+      patch("scripts.check_ai_review_disposition.GitHub") as client,
+      patch("scripts.check_ai_review_disposition.check_pr", return_value=passed) as check,
+      patch("sys.stderr", new_callable=io.StringIO),
+    ):
+      return main(), client, check
+
+  def test_checks_only_the_requested_pr(self):
+    code, client, check = self.run_main("--pr-number", "313")
+    self.assertEqual(code, 0)
+    client.assert_called_once_with("test-token")
+    check.assert_called_once_with(
+      client.return_value, "org/repo", 313, {BOT}, "https://github.com", ""
+    )
+    client.return_value.open_prs.assert_not_called()
+
+  def test_target_pr_failure_sets_exit_code(self):
+    code, _, check = self.run_main("--pr-number", "313", passed=False)
+    self.assertEqual(code, 1)
+    self.assertEqual(check.call_count, 1)
+
+  def test_missing_or_invalid_pr_never_defaults_to_a_repository_scan(self):
+    for arguments in (
+      (),
+      ("--pr-number", "0"),
+      ("--pr-number", "-1"),
+      ("--pr-number", "1.5"),
+    ):
+      with self.subTest(arguments=arguments), self.assertRaises(SystemExit) as error:
+        self.run_main(*arguments)
+      self.assertEqual(error.exception.code, 2)
+
+  def test_closed_pr_does_not_create_a_check(self):
+    api = GitHub("test-token")
+    with patch.object(api, "request", return_value={"state": "closed"}) as request:
+      self.assertTrue(
+        check_pr(api, "org/repo", 313, {BOT}, "https://github.com", "")
+      )
+    request.assert_called_once_with("GET", "/repos/org/repo/pulls/313")
 
 
 if __name__ == "__main__":

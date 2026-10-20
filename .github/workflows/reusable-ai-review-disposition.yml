@@ -8,10 +8,9 @@ on:
         required: true
         type: string
       pr-number:
-        description: 'PR to check; 0 checks all open PRs in the caller repository'
-        required: false
+        description: 'Positive PR number to check in the caller repository'
+        required: true
         type: number
-        default: 0
       jira-url:
         description: 'Optional trusted Jira base URL, e.g. https://example.atlassian.net'
         required: false
@@ -38,10 +37,9 @@ jobs:
     name: Evaluate AI Review Dispositions
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # All scans for a repository must serialize. Pending scans may be coalesced;
-    # each scan reads live state for every open PR, not an event snapshot.
+    # Serialize updates for this PR only; every run reads its live API state.
     concurrency:
-      group: ai-review-disposition-${{ github.repository }}
+      group: ai-review-disposition-${{ github.repository }}-${{ inputs.pr-number }}
       cancel-in-progress: false
     steps:
     - name: Checkout trusted shared scripts
@@ -59,7 +57,7 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Publish check on each PR head commit
+    - name: Publish check on the target PR head commit
       env:
         GH_TOKEN: ${{ github.token }}
         AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
