@@ -191,7 +191,11 @@ def evaluate(data, bots, authorized, tracking_valid):
     if not comments:
       continue
     root = comments[0]
-    if actor_login(root.get("author")) not in bots:
+    reviewer = actor_login(root.get("author"))
+    if reviewer not in bots and (
+      (root.get("author") or {}).get("__typename") != "User"
+      or reviewer == data["author"]
+    ):
       continue
     for bot in bots:
       if bot in completed_at and any(
@@ -201,8 +205,10 @@ def evaluate(data, bots, authorized, tracking_valid):
         error = f"{bot}: findings changed after review completion"
         if error not in errors:
           errors.append(error)
-    bot_activity = max(
-      c["updatedAt"] for c in comments if actor_login(c.get("author")) in bots
+    reviewer_activity = max(
+      c["updatedAt"]
+      for c in comments
+      if actor_login(c.get("author")) in (bots | {reviewer})
     )
     candidates = []
     for comment in comments[1:]:
@@ -223,8 +229,8 @@ def evaluate(data, bots, authorized, tracking_valid):
       comment, fields = latest
       status = fields.get("disposition", "Unaddressed")
       reason = fields.get("error", "")
-      if comment["updatedAt"] < bot_activity:
-        reason = "AI comment changed after disposition; reply again"
+      if comment["updatedAt"] < reviewer_activity:
+        reason = "Review comment changed after disposition; reply again"
       elif not reason and status == "Accepted":
         fix = fields.get("fix", "").lower()
         if not re.fullmatch(r"[0-9a-f]{40}", fix) or fix not in data["commits"]:

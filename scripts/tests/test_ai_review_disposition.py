@@ -35,8 +35,8 @@ def comment(body, login="contributor", timestamp="2026-10-09T02:00:00Z"):
   }
 
 
-def fixture(body=None, resolved=True):
-  comments = [comment("Please fix this", BOT, "2026-10-09T01:00:00Z")]
+def fixture(body=None, resolved=True, reviewer=BOT):
+  comments = [comment("Please fix this", reviewer, "2026-10-09T01:00:00Z")]
   if body:
     comments.append(comment(body))
   return {
@@ -85,9 +85,10 @@ class PolicyTests(unittest.TestCase):
         "Tracking: https://github.com/org/repo/issues/42"
       ),
     ]
-    for body in replies:
-      with self.subTest(body=body):
-        self.assertTrue(passed(result(fixture(body))))
+    for reviewer in (BOT, "human-reviewer"):
+      for body in replies:
+        with self.subTest(reviewer=reviewer, body=body):
+          self.assertTrue(passed(result(fixture(body, reviewer=reviewer))))
 
   def test_resolve_alone_does_not_pass(self):
     evaluation = result(fixture())
@@ -221,18 +222,103 @@ class PolicyTests(unittest.TestCase):
     data["reviews"][0]["submittedAt"] = "2026-10-09T01:50:00Z"
     self.assertTrue(passed(result(data)))
 
-  def test_human_root_thread_is_not_an_ai_finding(self):
-    data = fixture()
-    data["threads"][0]["comments"][0]["author"] = {
-      "login": "maintainer",
-      "__typename": "User",
-    }
+  def test_human_findings_require_complete_dispositions(self):
+    for body in (
+      None,
+      "done",
+      "Disposition: Rejected",
+      "Disposition: Unknown\nReason: Test",
+      "Disposition: Accepted\nReason: Fixed",
+      f"Disposition: Accepted\nReason: Fixed\nFix: {'c' * 40}",
+      "Disposition: Deferred\nReason: Later",
+      "Disposition: Deferred\nReason: Later\nTracking: ISSUE-42",
+    ):
+      with self.subTest(body=body):
+        evaluation = result(fixture(body, reviewer="human-reviewer"))
+        self.assertFalse(passed(evaluation))
+        self.assertEqual(len(evaluation["findings"]), 1)
+
+  def test_human_findings_keep_resolve_and_reply_permissions(self):
+    for resolved, login in ((False, "contributor"), (True, "stranger"), (True, BOT)):
+      with self.subTest(resolved=resolved, login=login):
+        data = fixture(
+          "Disposition: Invalid\nReason: Test", resolved, "human-reviewer"
+        )
+        data["threads"][0]["comments"][-1]["author"]["login"] = login
+        data["threads"][0]["isOutdated"] = True
+        evaluation = result(data)
+        self.assertFalse(passed(evaluation))
+        self.assertEqual(len(evaluation["findings"]), 1)
+    data["threads"][0]["comments"][-1]["author"]["login"] = "maintainer"
     self.assertTrue(passed(result(data)))
 
-  def test_pending_review_comments_are_not_published_findings(self):
-    data = fixture()
-    data["threads"][0]["comments"][0]["pullRequestReview"]["state"] = "PENDING"
+  def test_pr_author_deleted_author_and_unconfigured_bots_are_excluded(self):
+    for author in (
+      {"login": "contributor", "__typename": "User"},
+      None,
+      {"login": "other", "__typename": "Bot"},
+    ):
+      with self.subTest(author=author):
+        data = fixture()
+        data["threads"][0]["comments"][0]["author"] = author
+        self.assertEqual(result(data)["findings"], [])
+        self.assertTrue(passed(result(data)))
+
+  def test_configured_user_bot_takes_priority_over_pr_author_exclusion(self):
+    for owner in ("contributor", "infiscale-bot"):
+      with self.subTest(owner=owner):
+        data = fixture("Disposition: Invalid\nReason: Test", reviewer="infiscale-bot")
+        data["author"] = owner
+        data["reviews"][0]["author"] = {"login": "infiscale-bot", "__typename": "User"}
+        data["threads"][0]["comments"][-1]["author"]["login"] = "maintainer"
+        self.assertTrue(passed(result(data, bots={"infiscale-bot"})))
+        data["threads"][0]["comments"][-1]["author"]["login"] = "infiscale-bot"
+        self.assertFalse(passed(result(data, bots={"infiscale-bot"})))
+
+  def test_human_review_changes_require_a_fresh_disposition(self):
+    for follow_up in (False, True):
+      with self.subTest(follow_up=follow_up):
+        data = fixture("Disposition: Invalid\nReason: Test", reviewer="human-reviewer")
+        comments = data["threads"][0]["comments"]
+        if follow_up:
+          comments.append(
+            comment("Follow up", "human-reviewer", "2026-10-09T03:00:00Z")
+          )
+        else:
+          comments[0]["updatedAt"] = "2026-10-09T03:00:00Z"
+        evaluation = result(data)
+        self.assertEqual(evaluation["errors"], [])
+        self.assertIn("changed", evaluation["findings"][0]["error"])
+        comments[1]["updatedAt"] = "2026-10-09T04:00:00Z"
+        self.assertTrue(passed(result(data)))
+
+  def test_human_reviews_do_not_require_completion_markers(self):
+    data = fixture("Disposition: Invalid\nReason: Test", reviewer="human-reviewer")
+    data["threads"][0]["comments"][0]["updatedAt"] = "2026-10-09T01:45:00Z"
+    human_review = copy.deepcopy(data["reviews"][0])
+    human_review.update(author={"login": "human-reviewer"}, body="General feedback")
+    data["reviews"].append(human_review)
     self.assertTrue(passed(result(data)))
+    data["reviews"][0]["body"] = ""
+    self.assertFalse(passed(result(data)))
+
+  def test_unaddressed_human_finding_blocks_an_addressed_ai_finding(self):
+    data = fixture("Disposition: Invalid\nReason: Test")
+    other = fixture(reviewer="human-reviewer")["threads"][0]
+    other["id"] = "human-thread"
+    data["threads"].append(other)
+    evaluation = result(data)
+    self.assertFalse(passed(evaluation))
+    self.assertEqual(len(evaluation["findings"]), 2)
+    self.assertEqual(evaluation["findings"][0]["error"], "")
+    self.assertEqual(evaluation["findings"][1]["status"], "Unaddressed")
+
+  def test_pending_review_comments_are_not_published_findings(self):
+    for reviewer in (BOT, "human-reviewer"):
+      with self.subTest(reviewer=reviewer):
+        data = fixture(reviewer=reviewer)
+        data["threads"][0]["comments"][0]["pullRequestReview"]["state"] = "PENDING"
+        self.assertTrue(passed(result(data)))
 
   def test_quoted_and_fenced_dispositions_are_not_replies(self):
     for text in (
@@ -368,12 +454,14 @@ class ApiTests(unittest.TestCase):
     self.assertEqual(calls[-1].args[2]["conclusion"], "success")
 
   def test_new_finding_during_read_prevents_success(self):
-    data = fixture("Disposition: Invalid\nReason: False positive")
-    changed = copy.deepcopy(data)
-    changed["threads"].append(fixture()["threads"][0])
-    calls, ok = self.run_check([data, changed])
-    self.assertFalse(ok)
-    self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+    for reviewer in (BOT, "human-reviewer"):
+      with self.subTest(reviewer=reviewer):
+        data = fixture("Disposition: Invalid\nReason: False positive")
+        changed = copy.deepcopy(data)
+        changed["threads"].append(fixture(reviewer=reviewer)["threads"][0])
+        calls, ok = self.run_check([data, changed])
+        self.assertFalse(ok)
+        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
 
   def test_api_failure_finishes_check_as_failure(self):
     calls, ok = self.run_check(RuntimeError("failed"))
@@ -381,24 +469,30 @@ class ApiTests(unittest.TestCase):
     self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
 
   def test_closed_tracking_issue_or_pr_cannot_defer(self):
-    data = fixture(
-      "Disposition: Deferred\nReason: Later\nTracking: https://github.com/org/repo/issues/42"
-    )
-    for item in ({"state": "closed"}, {"state": "open", "pull_request": {}}):
-      with self.subTest(item=item):
-        calls, ok = self.run_check([data], item)
-        self.assertFalse(ok)
-        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+    for reviewer in (BOT, "human-reviewer"):
+      data = fixture(
+        "Disposition: Deferred\nReason: Later\n"
+        "Tracking: https://github.com/org/repo/issues/42",
+        reviewer=reviewer,
+      )
+      for item in ({"state": "closed"}, {"state": "open", "pull_request": {}}):
+        with self.subTest(reviewer=reviewer, item=item):
+          calls, ok = self.run_check([data], item)
+          self.assertFalse(ok)
+          self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
 
   def test_deferred_requires_a_successful_open_issue_lookup(self):
-    data = fixture(
-      "Disposition: Deferred\nReason: Follow up\n"
-      "Tracking: https://github.com/org/repo/issues/42"
-    )
-    calls, ok = self.run_check([data, copy.deepcopy(data)], {"state": "open"})
-    self.assertTrue(ok)
-    self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
-    self.assertEqual(calls[-1].args[2]["conclusion"], "success")
+    for reviewer in (BOT, "human-reviewer"):
+      with self.subTest(reviewer=reviewer):
+        data = fixture(
+          "Disposition: Deferred\nReason: Follow up\n"
+          "Tracking: https://github.com/org/repo/issues/42",
+          reviewer=reviewer,
+        )
+        calls, ok = self.run_check([data, copy.deepcopy(data)], {"state": "open"})
+        self.assertTrue(ok)
+        self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
+        self.assertEqual(calls[-1].args[2]["conclusion"], "success")
 
   def test_missing_unreadable_or_failed_issue_lookup_blocks_deferred(self):
     data = fixture(
