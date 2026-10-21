@@ -125,6 +125,7 @@ def snapshot(api, repository, number):
   if current["head"]["sha"] != pr["head"]["sha"]:
     raise RuntimeError("PR head changed while reading review data; rerun required")
   return {
+    "repository": repository,
     "head": pr["head"]["sha"],
     "author": pr["user"]["login"].lower(),
     "state": current["state"],
@@ -205,11 +206,11 @@ def evaluate(data, bots, authorized, tracking_valid):
         error = f"{bot}: findings changed after review completion"
         if error not in errors:
           errors.append(error)
-    reviewer_activity = max(
-      c["updatedAt"]
-      for c in comments
-      if actor_login(c.get("author")) in (bots | {reviewer})
-    )
+    reviewer_activity = root["updatedAt"]
+    if reviewer in bots:
+      reviewer_activity = max(
+        c["updatedAt"] for c in comments if actor_login(c.get("author")) in bots
+      )
     candidates = []
     for comment in comments[1:]:
       author = comment.get("author") or {}
@@ -232,9 +233,13 @@ def evaluate(data, bots, authorized, tracking_valid):
       if comment["updatedAt"] < reviewer_activity:
         reason = "Review comment changed after disposition; reply again"
       elif not reason and status == "Accepted":
-        fix = fields.get("fix", "").lower()
+        fix = fields.get("fix", "")
+        link = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/commit/([^/]+)", fix)
+        if link and link[1].lower() == data["repository"].lower():
+          fix = link[2]
+        fix = fix.lower()
         if not re.fullmatch(r"[0-9a-f]{40}", fix) or fix not in data["commits"]:
-          reason = "Fix must be a full commit SHA in the current PR"
+          reason = "Fix must be a current PR commit SHA or its repository commit URL"
       elif not reason and status == "Deferred":
         if not tracking_valid(fields.get("tracking", "")):
           reason = "Tracking must reference an existing, readable, open GitHub issue"

@@ -22,7 +22,7 @@ Bot 由精确 GitHub login 匹配，例如 `reviewer[bot]`；不根据显示名�
 
 | Disposition | 必须提供的字段 | 检查的证据 |
 | --- | --- | --- |
-| Accepted | `Reason`、`Fix` | 完整的 40 位 commit SHA，必须仍在当前 PR 的 commits 中 |
+| Accepted | `Reason`、`Fix` | 完整的 40 位 commit SHA，或当前仓库的标准 commit 链接；提交必须仍在当前 PR 的 commits 中 |
 | Rejected | `Reason` | 非空拒绝理由 |
 | Invalid | `Reason` | 非空误报理由 |
 | Deferred | `Reason`、`Tracking` | GitHub API 确认存在、当前 token 可读且仍开放的 Issue，不能是 PR |
@@ -38,8 +38,10 @@ Accepted：
 ```text
 Disposition: Accepted
 Reason: 已补充空数组边界判断，并增加回归测试。
-Fix: 0123456789abcdef0123456789abcdef01234567
+Fix: https://github.com/IS-Model-Framework/example/commit/0123456789abcdef0123456789abcdef01234567
 ```
+
+`Fix` 兼容直接填写完整 40 位 SHA。链接仅支持 `https://github.com/owner/repo/commit/<完整40位SHA>`，仓库必须与当前 PR 所在仓库一致；不接受短 SHA、其他站点或仓库、PR 链接、查询参数和锚点。链接提取 SHA 后复用现有 PR 提交列表校验，不增加 API 请求。实际回复作为普通文本发送，不要包在代码块里，commit 链接即可点击跳转；延期 Issue 链接仍填写在 `Tracking` 字段中。
 
 Rejected：
 
@@ -65,7 +67,7 @@ Tracking: https://github.com/IS-Model-Framework/example/issues/42
 
 `Tracking` 只接受 `https://github.com/owner/repo/issues/number` 形式的完整 Issue 链接，不接受其他站点、裸编号、PR 链接、查询参数或锚点。检查器会实际调用 GitHub Issues API；不存在、已关闭、无法读取的 Issue，以及限流、鉴权或服务错误都不会通过。允许引用其他仓库的 Issue，但当前 token 必须能读取；其他仓库的私有 Issue 可能需要 GitHub App installation token。
 
-采用最新编辑时间的明确 disposition 回复；同一时间取 thread 中更后的回复。新的不完整 disposition 会替代旧的有效回复，避免沿用过期决定。普通交流回复不会替代 disposition。发起该 thread 的 reviewer 或配置的 AI Bot 编辑意见或追加 inline 回复后，需要重新确认 disposition。AI 的活动仍按下述完成协议检查；人工意见变化不要求人工提供完成标记。修复提交被 force-push 移出 PR 后，Accepted 失效。
+采用最新编辑时间的明确 disposition 回复；同一时间取 thread 中更后的回复。新的不完整 disposition 会替代旧的有效回复，避免沿用过期决定。普通交流回复不会替代 disposition。人工线程只在原始审查意见的编辑时间晚于模板回复时要求重新确认；reviewer 后续追加“好的”“谢谢”或普通讨论不会使已有模板失效。新问题应新开线程或编辑原始意见。AI 线程仍按原有规则处理 AI 的编辑和追加回复，AI 完成协议不变；人工 reviewer 不需要完成标记。修复提交被 force-push 移出 PR 后，Accepted 的 SHA 和链接两种格式都失效。
 
 有效回复之后，由 Contributor / Maintainer Resolve Conversation；工具不会自动 Resolve。只 Resolve、只写 “done / 已修复”、在 PR 总结里统一回答，都不能通过。
 

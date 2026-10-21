@@ -40,6 +40,7 @@ def fixture(body=None, resolved=True, reviewer=BOT):
   if body:
     comments.append(comment(body))
   return {
+    "repository": "org/repo",
     "head": HEAD,
     "author": "contributor",
     "state": "open",
@@ -105,16 +106,51 @@ class PolicyTests(unittest.TestCase):
     self.assertFalse(passed(result(data)))
 
   def test_accepted_requires_full_sha_still_in_pr(self):
-    for fix in ("", FIX[:7], "c" * 40, "https://github.com/org/repo/commit/" + FIX):
+    for fix in ("", FIX[:7], "c" * 40):
       with self.subTest(fix=fix):
         self.assertFalse(
           passed(result(fixture(f"Disposition: Accepted\nReason: Fixed\nFix: {fix}")))
         )
 
   def test_force_push_removing_fix_invalidates_acceptance(self):
-    data = fixture(f"Disposition: Accepted\nReason: Fixed\nFix: {FIX}")
-    data["commits"] = [HEAD]
-    self.assertFalse(passed(result(data)))
+    for fix in (FIX, f"https://github.com/org/repo/commit/{FIX}"):
+      with self.subTest(fix=fix):
+        data = fixture(f"Disposition: Accepted\nReason: Fixed\nFix: {fix}")
+        data["commits"] = [HEAD]
+        self.assertFalse(passed(result(data)))
+
+  def test_commit_links_and_sha_share_pr_membership_validation(self):
+    for reviewer in (BOT, "human-reviewer"):
+      for fix in (
+        FIX,
+        f"https://github.com/org/repo/commit/{FIX}",
+        f"https://github.com/ORG/REPO/commit/{FIX.upper()}",
+      ):
+        with self.subTest(reviewer=reviewer, fix=fix):
+          data = fixture(f"Disposition: Accepted\nReason: Fixed\nFix: {fix}", reviewer=reviewer)
+          self.assertTrue(passed(result(data)))
+          self.assertEqual(len(result(data)["findings"]), 1)
+
+  def test_commit_links_require_the_current_repository_and_a_full_sha(self):
+    for fix in (
+      f"http://github.com/org/repo/commit/{FIX}",
+      f"https://github.com.evil/org/repo/commit/{FIX}",
+      f"https://user@github.com/org/repo/commit/{FIX}",
+      f"https://github.com/other/repo/commit/{FIX}",
+      f"https://github.com/org/other/commit/{FIX}",
+      f"https://github.com/org/repo/COMMIT/{FIX}",
+      f"https://github.com/org/repo/pull/128/commits/{FIX}",
+      "https://github.com/org/repo/issues/42",
+      f"https://github.com/org/repo/commit/{FIX[:7]}",
+      f"https://github.com/org/repo/commit/{'g' * 40}",
+      f"https://github.com/org/repo/commit/{'c' * 40}",
+      f"https://github.com/org/repo/commit/{FIX}?query=1",
+      f"https://github.com/org/repo/commit/{FIX}#diff-1",
+      f"https://github.com/org/repo/commit/{FIX}/extra",
+    ):
+      with self.subTest(fix=fix):
+        data = fixture(f"Disposition: Accepted\nReason: Fixed\nFix: {fix}")
+        self.assertFalse(passed(result(data)))
 
   def test_every_disposition_requires_reason(self):
     for status in ("Accepted", "Rejected", "Deferred", "Invalid"):
@@ -146,11 +182,13 @@ class PolicyTests(unittest.TestCase):
     self.assertTrue(passed(result(data)))
 
   def test_latest_explicit_reply_supersedes_old_valid_reply(self):
-    data = fixture("Disposition: Rejected\nReason: Covered upstream")
-    data["threads"][0]["comments"].append(
-      comment("Disposition: Accepted", timestamp="2026-10-09T03:00:00Z")
-    )
-    self.assertFalse(passed(result(data)))
+    for reviewer in (BOT, "human-reviewer"):
+      with self.subTest(reviewer=reviewer):
+        data = fixture("Disposition: Rejected\nReason: Covered upstream", reviewer=reviewer)
+        data["threads"][0]["comments"].append(
+          comment("Disposition: Accepted", timestamp="2026-10-09T03:00:00Z")
+        )
+        self.assertFalse(passed(result(data)))
 
   def test_edit_timestamp_selects_latest_disposition(self):
     data = fixture("Disposition: Accepted")
@@ -275,22 +313,36 @@ class PolicyTests(unittest.TestCase):
         data["threads"][0]["comments"][-1]["author"]["login"] = "infiscale-bot"
         self.assertFalse(passed(result(data, bots={"infiscale-bot"})))
 
-  def test_human_review_changes_require_a_fresh_disposition(self):
-    for follow_up in (False, True):
-      with self.subTest(follow_up=follow_up):
+  def test_editing_the_human_root_requires_a_fresh_disposition(self):
+    data = fixture("Disposition: Invalid\nReason: Test", reviewer="human-reviewer")
+    comments = data["threads"][0]["comments"]
+    comments[0]["updatedAt"] = "2026-10-09T03:00:00Z"
+    evaluation = result(data)
+    self.assertEqual(evaluation["errors"], [])
+    self.assertIn("changed", evaluation["findings"][0]["error"])
+    comments[1]["updatedAt"] = "2026-10-09T04:00:00Z"
+    self.assertTrue(passed(result(data)))
+
+  def test_human_follow_up_keeps_the_existing_disposition(self):
+    for text in ("OK", "Thanks", "Follow-up discussion"):
+      with self.subTest(text=text):
         data = fixture("Disposition: Invalid\nReason: Test", reviewer="human-reviewer")
-        comments = data["threads"][0]["comments"]
-        if follow_up:
-          comments.append(
-            comment("Follow up", "human-reviewer", "2026-10-09T03:00:00Z")
-          )
-        else:
-          comments[0]["updatedAt"] = "2026-10-09T03:00:00Z"
-        evaluation = result(data)
-        self.assertEqual(evaluation["errors"], [])
-        self.assertIn("changed", evaluation["findings"][0]["error"])
-        comments[1]["updatedAt"] = "2026-10-09T04:00:00Z"
+        data["threads"][0]["comments"].append(
+          comment(text, "human-reviewer", "2026-10-09T03:00:00Z")
+        )
         self.assertTrue(passed(result(data)))
+        data["threads"][0]["isResolved"] = False
+        self.assertIn("resolve", result(data)["findings"][0]["error"])
+
+  def test_ai_follow_up_still_requires_a_fresh_disposition(self):
+    data = fixture("Disposition: Invalid\nReason: Test")
+    data["threads"][0]["comments"].append(
+      comment("Follow up", BOT, "2026-10-09T03:00:00Z")
+    )
+    data["reviews"][0]["submittedAt"] = "2026-10-09T03:30:00Z"
+    evaluation = result(data)
+    self.assertEqual(evaluation["errors"], [])
+    self.assertIn("changed", evaluation["findings"][0]["error"])
 
   def test_human_reviews_do_not_require_completion_markers(self):
     data = fixture("Disposition: Invalid\nReason: Test", reviewer="human-reviewer")
@@ -444,6 +496,27 @@ class ApiTests(unittest.TestCase):
       self.assertRaises(RuntimeError),
     ):
       snapshot(api, "org/repo", 128)
+
+  def test_snapshot_retains_repository_for_commit_link_validation(self):
+    pr = {"head": {"sha": HEAD}, "user": {"login": "contributor"}, "state": "open"}
+    api = GitHub("test-token")
+    with (
+      patch.object(api, "request", return_value=pr),
+      patch.object(api, "connection", return_value=[]),
+    ):
+      self.assertEqual(snapshot(api, "org/repo", 128)["repository"], "org/repo")
+
+  def test_commit_link_does_not_add_api_requests(self):
+    for reviewer in (BOT, "human-reviewer"):
+      with self.subTest(reviewer=reviewer):
+        data = fixture(
+          f"Disposition: Accepted\nReason: Fixed\nFix: https://github.com/org/repo/commit/{FIX}",
+          reviewer=reviewer,
+        )
+        calls, ok = self.run_check([data, copy.deepcopy(data)])
+        self.assertTrue(ok)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[-1].args[2]["conclusion"], "success")
 
   def test_check_is_written_to_pr_head_not_event_sha(self):
     data = fixture("Disposition: Invalid\nReason: False positive")
