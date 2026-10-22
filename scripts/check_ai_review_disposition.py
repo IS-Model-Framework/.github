@@ -83,7 +83,8 @@ def snapshot(api, repository, number):
   threads = api.connection(
     pr["node_id"],
     "reviewThreads",
-    f"""id isResolved
+    # Repository rules enforce resolution; it must not affect snapshot equality.
+    f"""id
       comments(first: 100) {{ nodes {{ {COMMENT_FIELDS} }} {PAGE_FIELDS} }}""",
   )
   for thread in threads:
@@ -215,8 +216,6 @@ def evaluate(data, bots, authorized, tracking_valid):
       elif not reason and status == "Deferred":
         if not tracking_valid(fields.get("tracking", "")):
           reason = "Tracking must reference an existing, readable, open GitHub issue"
-      if not reason and not thread["isResolved"]:
-        reason = "Disposition is valid; resolve the conversation"
     findings.append({
       "id": thread["id"],
       "url": root["url"],
@@ -237,7 +236,9 @@ def summary(number, head, result):
     "",
     f"Head: `{head}`",
     "",
-    f"Findings: {len(result['findings'])}; unresolved requirements: {len(blocked)}",
+    f"Findings: {len(result['findings'])}; blocked dispositions: {len(blocked)}",
+    "",
+    "Conversation resolution is enforced separately by GitHub repository rules.",
     "",
   ]
   lines.extend(f"- {error}" for error in result["errors"])

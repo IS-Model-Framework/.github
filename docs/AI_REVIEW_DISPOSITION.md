@@ -1,6 +1,6 @@
 # AI Review / Disposition Check
 
-合并前检查三件事：每个指定 AI 完成过审查；AI 和人工 reviewer 的每条行内线程都有有效模板回复；这些线程全部 resolved。无需采纳所有意见，检查也不代替人工 approval。
+合并门禁分工：本 Check 验证每个指定 AI 完成过审查，以及 AI 和人工 reviewer 的每条行内线程都有有效模板回复；GitHub 原生的 **Require conversation resolution before merging** 规则负责要求讨论线程全部 resolved。两项都满足才能合并，无需采纳所有意见，也不代替人工 approval。
 
 ## 检查规则
 
@@ -11,7 +11,8 @@
 - 检查指定 AI 和 PR 作者之外的人工账号创建的全部已发布 inline threads，包括 outdated 和 resolved threads。PR 作者自己的人工线程、未配置 Bot 的线程、PR 顶层评论和 Review 总评不计为待处理线程；pending review 不计入。配置的 AI 即使是 `User` 或 PR 作者，仍按 AI 处理。
 - 模板回复者须为 PR 作者或当前具有仓库写权限的人工账号；Bot 和配置的 AI 服务账号不能自行处理意见。组织成员身份本身不代表写权限。
 - 采用编辑时间最新的明确模板回复，同一时间取 thread 中更后的回复；新的无效模板会替代旧模板，普通讨论不会。AI/人工使用相同规则，后续讨论或原始意见编辑不额外要求重复确认；新问题应新开线程。
-- 每个线程必须同时满足有效回复和 resolved。仅 resolved、仅回复 “done”，或在 PR 总结中统一回答均不能通过。工具不自动回复或 resolve。
+- 本 Check 只验证每个纳入检查的线程有有效回复，不读取或判断 resolved 状态。仅 resolved、仅回复 “done”，或在 PR 总结中统一回答均不能通过。工具不自动回复或 resolve。
+- 有效回复可以让本 Check 在未 resolved 时通过；GitHub 原生 conversation resolution 规则继续阻止合并。点击 Resolve/Unresolve 后，GitHub 更新原生合并条件，无需为了该状态重跑本 Check。原生规则覆盖所有代码讨论，范围可能比本 Check 筛选的线程更广。
 
 | Bot login | 可替代正式 Review 的成功结束评论 |
 | --- | --- |
@@ -50,11 +51,12 @@ Tracking: N/A
 2. 设置组织/仓库 Variable `AI_REVIEW_BOTS`，如 `chatgpt-codex-connector[bot],infiscale-bot`。空值会报错，不提供隐式默认 Bot。
 3. 生产接入时，将 caller 中 `uses: ...@main` 和 `shared-ref: main` 同时固定到本公共 CI 仓库的同一个已审核 commit SHA。
 4. caller 需要 `contents: read`、`pull-requests: read`、`issues: read`、`checks: write`；不执行或检出 PR 代码。
-5. 首次运行后，将脚本发布的 **`AI Review / Disposition Check`** 加入组织/仓库 ruleset 的 Required Status Checks，来源选 GitHub Actions。保留人工 approval 与 conversation resolution 规则。不要选择 Actions job 的成功状态，事件的 `GITHUB_SHA` 不一定是 PR head。
+5. 首次运行后，将脚本发布的 **`AI Review / Disposition Check`** 加入组织/仓库 ruleset 的 Required Status Checks，来源选 GitHub Actions。不要选择 Actions job 的成功状态，事件的 `GITHUB_SHA` 不一定是 PR head。
+6. 在目标分支的 ruleset / 分支保护中启用 [**Require conversation resolution before merging**](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#require-a-pull-request-before-merging)，并保留人工 approval 要求。此项必须与 Required Status Check 同时配置；脚本不会修改仓库规则，也不会因未 resolved 而失败。
 
 PR opened/reopened/synchronize/ready_for_review 和 PR 顶层评论变化直接触发检查。Review/行内评论变化先运行无权限 collector，再通过默认分支的 `workflow_run` 触发检查器，因此 fork PR 也可复查。collector 的 `run-name` 必须保持为 PR 编号；该值仅用于路由，判定始终重新读取实时 API，不接受 collector 的代码、artifact 或审查结论。
 
-Resolve/Unresolve 没有原生 Actions trigger：resolve 后，在 PR 顶层发一条评论或通过 Actions 手动运行 `AI Review Disposition`，填写 `pr-number`。使用 `GITHUB_TOKEN` 发布的 Review/评论通常不会触发后续 Actions，应由审查流程显式触发复查，或用 App token 发布。
+Resolve/Unresolve 无需触发本 Check，也不需要额外发评论或手动复查；它们由 GitHub 原生 conversation resolution 规则处理。审查完成或模板回复变化仍需触发检查。使用 `GITHUB_TOKEN` 发布的 Review/评论通常不会触发后续 Actions，应由审查流程显式触发复查，或用 App token 发布。
 
 同一 PR 串行检查，不取消正在执行的检查；不同 PR 独立。通过前再完整读取一次数据，提交或评论变化则阻断。API 错误不放行；取消、超时或 Check 写入失败可能留下 in-progress 状态，需重跑。该方案是异步门禁，不提供不可删改的历史审计或 merge queue 合成 SHA 支持。
 
@@ -66,6 +68,6 @@ GH_TOKEN="<token>" python scripts/check_ai_review_disposition.py \
   --bots 'chatgpt-codex-connector[bot],infiscale-bot'
 ```
 
-仅支持 GitHub.com。退出码：0 通过或 closed PR 跳过，1 未通过，2 参数错误或未捕获的执行错误。验证：`python -m unittest discover -s scripts/tests -v`；正式启用 required check 前，应在目标仓库试运行 Bot 完成 → 模板回复 → resolve → 复查流程。
+仅支持 GitHub.com。退出码：0 通过或 closed PR 跳过，1 未通过，2 参数错误或未捕获的执行错误。验证：`python -m unittest discover -s scripts/tests -v`；正式启用合并门禁前，应在目标仓库验证：Bot 完成且模板有效时，即使线程未 resolved，本 Check 也能通过，但 GitHub 原生规则阻止合并；Resolve 后原生条件满足；再次 Unresolve 后原生规则重新阻止合并，全程无需因解决状态变化重跑本 Check。另需确认没有模板或模板无效的线程仍让本 Check 失败。
 
 参考：[Actions 事件](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)、[Checks API](https://docs.github.com/en/rest/checks/runs)、[复用 workflow](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)。

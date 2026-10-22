@@ -88,7 +88,7 @@ def result(data, bots=None, authorized=None, tracking_valid=None):
 
 
 class PolicyTests(unittest.TestCase):
-  def test_all_dispositions_pass_with_required_evidence(self):
+  def test_all_dispositions_pass_independently_of_resolution(self):
     replies = [
       f"Disposition: Accepted\nReason: Added bounds check\nFix: {FIX}",
       "Disposition: Rejected\nReason: This input is already validated upstream",
@@ -100,17 +100,19 @@ class PolicyTests(unittest.TestCase):
     ]
     for reviewer in (BOT, "human-reviewer"):
       for body in replies:
-        with self.subTest(reviewer=reviewer, body=body):
-          self.assertTrue(passed(result(fixture(body, reviewer=reviewer))))
+        for resolved in (False, True):
+          with self.subTest(reviewer=reviewer, body=body, resolved=resolved):
+            self.assertTrue(passed(result(fixture(body, resolved, reviewer))))
 
   def test_resolve_alone_does_not_pass(self):
     evaluation = result(fixture())
     self.assertFalse(passed(evaluation))
     self.assertEqual(evaluation["findings"][0]["status"], "Unaddressed")
 
-  def test_valid_reply_still_needs_resolve(self):
-    data = fixture("Disposition: Rejected\nReason: Covered upstream", resolved=False)
-    self.assertIn("resolve", result(data)["findings"][0]["error"])
+  def test_valid_reply_does_not_require_resolution_field(self):
+    data = fixture("Disposition: Rejected\nReason: Covered upstream")
+    del data["threads"][0]["isResolved"]
+    self.assertTrue(passed(result(data)))
 
   def test_outdated_findings_still_block(self):
     data = fixture()
@@ -335,10 +337,10 @@ class PolicyTests(unittest.TestCase):
     data["threads"].append(fixture()["threads"][0])
     self.assertFalse(passed(result(data)))
 
-  def test_human_findings_keep_resolve_and_reply_permissions(self):
-    for resolved, login in ((False, "contributor"), (True, "stranger"), (True, BOT)):
-      with self.subTest(resolved=resolved, login=login):
-        data = fixture("Disposition: Invalid\nReason: Test", resolved, "human-reviewer")
+  def test_human_findings_keep_reply_permissions(self):
+    for login in ("stranger", BOT):
+      with self.subTest(login=login):
+        data = fixture("Disposition: Invalid\nReason: Test", False, "human-reviewer")
         data["threads"][0]["comments"][-1]["author"]["login"] = login
         data["threads"][0]["isOutdated"] = True
         evaluation = result(data)
@@ -380,7 +382,7 @@ class PolicyTests(unittest.TestCase):
         )
         self.assertTrue(passed(result(data)))
         data["threads"][0]["isResolved"] = False
-        self.assertIn("resolve", result(data)["findings"][0]["error"])
+        self.assertTrue(passed(result(data)))
 
   def test_human_reviews_do_not_require_completion_markers(self):
     data = fixture("Disposition: Invalid\nReason: Test", reviewer="human-reviewer")
@@ -429,7 +431,8 @@ class PolicyTests(unittest.TestCase):
   def test_summary_links_to_blocked_threads(self):
     data = fixture("Disposition: Accepted\nReason: Fixed", resolved=False)
     report = summary(128, HEAD, result(data))
-    self.assertIn("unresolved requirements: 1", report)
+    self.assertIn("blocked dispositions: 1", report)
+    self.assertIn("Conversation resolution is enforced separately", report)
     self.assertIn(data["threads"][0]["comments"][0]["url"], report)
 
 
@@ -566,6 +569,55 @@ class ApiTests(unittest.TestCase):
     with patch.object(api, "request", return_value={"data": {}, "errors": [{}]}):
       with self.assertRaises(RuntimeError):
         api.graphql("query", {})
+
+  def test_resolution_changes_during_check_do_not_block(self):
+    api = GitHub("test-token")
+    data = fixture("Disposition: Invalid\nReason: False positive")
+    pr = {
+      "node_id": "pr-1",
+      "head": {"sha": HEAD},
+      "user": {"login": data["author"]},
+      "state": "open",
+    }
+
+    def page(nodes):
+      return {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}
+
+    for resolutions in ((False, True), (True, False)):
+      with self.subTest(resolutions=resolutions):
+        states = iter(resolutions)
+
+        def graphql(query, variables, states=states):
+          if "reviewThreads(first:" in query:
+            thread = {
+              "id": "thread-1",
+              "comments": page(data["threads"][0]["comments"]),
+            }
+            resolved = next(states)
+            # Return resolution state only if the query requested it.
+            if "isResolved" in query:
+              thread["isResolved"] = resolved
+            return {"node": {"reviewThreads": page([thread])}}
+          for field, nodes in (
+            ("reviews", data["reviews"]),
+            ("comments", []),
+            ("commits", [{"commit": {"oid": FIX}}, {"commit": {"oid": HEAD}}]),
+          ):
+            if f"{field}(first:" in query:
+              return {"node": {field: page(nodes)}}
+          self.fail("Unexpected GraphQL query")
+
+        with (
+          patch.object(
+            api, "request", side_effect=[pr, {"id": 99}, pr, pr, pr, pr, {}]
+          ) as request,
+          patch.object(api, "graphql", side_effect=graphql),
+          patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}),
+          patch("builtins.print"),
+        ):
+          self.assertTrue(check_pr(api, "org/repo", 128, {BOT}))
+        self.assertEqual(list(states), [])
+        self.assertEqual(request.call_args.args[2]["conclusion"], "success")
 
   def test_snapshot_rejects_head_change_during_read(self):
     api = GitHub("test-token")
