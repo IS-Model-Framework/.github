@@ -16,10 +16,6 @@ on:
         required: false
         type: string
         default: main
-    secrets:
-      shared-read-token:
-        description: 'Optional read-only token for checkout when shared CI repo is private'
-        required: false
 
 permissions:
   contents: read
@@ -41,7 +37,6 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: IS-Model-Framework/.github
-        token: ${{ secrets.shared-read-token || github.token }}
         ref: ${{ inputs.shared-ref }}
         path: .ci-shared
         persist-credentials: false

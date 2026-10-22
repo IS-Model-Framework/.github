@@ -6,7 +6,7 @@ import json
 import os
 import re
 import sys
-from collections import Counter
+from functools import cache
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -15,7 +15,7 @@ CHECK_NAME = "AI Review / Disposition Check"
 STATUSES = ("Accepted", "Rejected", "Deferred", "Invalid")
 AUTHOR_FIELDS = "author { login __typename }"
 COMMENT_FIELDS = f"""
-  id body url createdAt updatedAt {AUTHOR_FIELDS}
+  id body url updatedAt {AUTHOR_FIELDS}
   pullRequestReview {{ state }}
 """
 PAGE_FIELDS = "pageInfo { hasNextPage endCursor }"
@@ -34,13 +34,9 @@ class GitHub:
     self.token = token
 
   def request(self, method, path, body=None):
-    data = None
-    if body is not None:
-      data = json.dumps(body).encode("utf-8")
-
     request = Request(
       "https://api.github.com" + path,
-      data=data,
+      data=json.dumps(body).encode("utf-8") if body is not None else None,
       method=method,
       headers={
         "Authorization": f"Bearer {self.token}",
@@ -57,71 +53,48 @@ class GitHub:
       raise RuntimeError("GitHub GraphQL returned errors; refusing partial data")
     return result["data"]
 
-  def connection(self, repository, number, field, selection):
-    owner, name = repository.split("/")
+  def connection(self, node_id, field, selection, typename="PullRequest", page=None):
     cursor = None
     nodes = []
     while True:
-      query = f"""
-        query($owner: String!, $name: String!, $number: Int!, $cursor: String) {{
-          repository(owner: $owner, name: $name) {{
-            pullRequest(number: $number) {{
+      if page is None:
+        query = f"""
+          query($id: ID!, $cursor: String) {{
+            node(id: $id) {{ ... on {typename} {{
               {field}(first: 100, after: $cursor) {{
                 nodes {{ {selection} }} {PAGE_FIELDS}
               }}
-            }}
+            }} }}
           }}
-        }}
-      """
-      data = self.graphql(
-        query, {"owner": owner, "name": name, "number": number, "cursor": cursor}
-      )
-      page = data["repository"]["pullRequest"][field]
+        """
+        data = self.graphql(query, {"id": node_id, "cursor": cursor})
+        page = data["node"][field]
       nodes.extend(page["nodes"])
       if not page["pageInfo"]["hasNextPage"]:
         return nodes
       cursor = page["pageInfo"]["endCursor"]
-
-  def comments(self, thread):
-    page = thread["comments"]
-    comments = list(page["nodes"])
-    while page["pageInfo"]["hasNextPage"]:
-      query = f"""
-        query($id: ID!, $cursor: String) {{
-          node(id: $id) {{ ... on PullRequestReviewThread {{
-            comments(first: 100, after: $cursor) {{
-              nodes {{ {COMMENT_FIELDS} }} {PAGE_FIELDS}
-            }}
-          }} }}
-        }}
-      """
-      data = self.graphql(
-        query, {"id": thread["id"], "cursor": page["pageInfo"]["endCursor"]}
-      )
-      page = data["node"]["comments"]
-      comments.extend(page["nodes"])
-    return comments
+      page = None
 
 
 def snapshot(api, repository, number):
   pr = api.request("GET", f"/repos/{repository}/pulls/{number}")
-  reviews = api.connection(
-    repository,
-    number,
-    "reviews",
-    f"id state {AUTHOR_FIELDS}",
-  )
-  comments = api.connection(repository, number, "comments", f"id body {AUTHOR_FIELDS}")
+  reviews = api.connection(pr["node_id"], "reviews", f"id state {AUTHOR_FIELDS}")
+  comments = api.connection(pr["node_id"], "comments", f"id body {AUTHOR_FIELDS}")
   threads = api.connection(
-    repository,
-    number,
+    pr["node_id"],
     "reviewThreads",
-    f"""id isResolved isOutdated
+    f"""id isResolved
       comments(first: 100) {{ nodes {{ {COMMENT_FIELDS} }} {PAGE_FIELDS} }}""",
   )
   for thread in threads:
-    thread["comments"] = api.comments(thread)
-  commits = api.connection(repository, number, "commits", "commit { oid }")
+    thread["comments"] = api.connection(
+      thread["id"],
+      "comments",
+      COMMENT_FIELDS,
+      "PullRequestReviewThread",
+      page=thread["comments"],
+    )
+  commits = api.connection(pr["node_id"], "commits", "commit { oid }")
   current = api.request("GET", f"/repos/{repository}/pulls/{number}")
   if current["head"]["sha"] != pr["head"]["sha"]:
     raise RuntimeError("PR head changed while reading review data; rerun required")
@@ -162,37 +135,40 @@ def parse_disposition(body):
   return fields
 
 
-def evaluate(data, bots, authorized, tracking_valid):
-  """Pure policy; API-dependent identity and tracking checks are supplied by caller."""
-  errors = []
-  findings = []
-  for bot in sorted(bots):
-    reviewed = any(
-      actor_login(review.get("author")) == bot
-      and review["state"] in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
-      for review in data["reviews"]
-    )
-    completed = any(
-      actor_login(comment.get("author")) == bot
-      and (
-        (
-          bot == "infiscale-bot"
-          and comment["body"].strip() == "未发现本次 PR 引入的新问题。LGTM！"  # noqa: RUF001
-        )
-        or (
-          bot == "chatgpt-codex-connector[bot]"
-          and comment["body"].startswith("<!-- codex-pull-request-review-summary -->\n")
-          and re.search(
-            r"(?m)^\| 📝 \*\*Code Review\*\* \| ✅ \*\*Completed\*\*"
-            r"(?: <relative-time [^\r\n|]*</relative-time>)? \|",
-            comment["body"],
-          )
-        )
+def completion_comment(comment):
+  bot = actor_login(comment.get("author"))
+  body = comment["body"].replace("\r\n", "\n").strip()
+  if bot == "infiscale-bot":
+    return body == "未发现本次 PR 引入的新问题。LGTM！"  # noqa: RUF001
+  return (
+    bot == "chatgpt-codex-connector[bot]"
+    and body.startswith("<!-- codex-pull-request-review-summary -->\n")
+    and bool(
+      re.search(
+        r"(?m)^\| 📝 \*\*Code Review\*\* \| ✅ \*\*Completed\*\*"
+        r"(?: <relative-time [^\n|]*</relative-time>)? \|",
+        body,
       )
-      for comment in data["comments"]
     )
-    if not reviewed and not completed:
-      errors.append(f"{bot}: missing published review or successful completion comment")
+  )
+
+
+def evaluate(data, bots, authorized, tracking_valid):
+  """Check PR-wide completion, then apply the same reply policy to AI/human threads."""
+  completed = {
+    actor_login(review.get("author"))
+    for review in data["reviews"]
+    if review["state"] in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
+  } | {
+    actor_login(comment.get("author"))
+    for comment in data["comments"]
+    if completion_comment(comment)
+  }
+  errors = [
+    f"{bot}: missing published review or successful completion comment"
+    for bot in sorted(bots - completed)
+  ]
+  findings = []
 
   for thread in data["threads"]:
     comments = [
@@ -209,11 +185,6 @@ def evaluate(data, bots, authorized, tracking_valid):
       or reviewer == data["author"]
     ):
       continue
-    reviewer_activity = root["updatedAt"]
-    if reviewer in bots:
-      reviewer_activity = max(
-        c["updatedAt"] for c in comments if actor_login(c.get("author")) in bots
-      )
     candidates = []
     for comment in comments[1:]:
       author = comment.get("author") or {}
@@ -230,12 +201,10 @@ def evaluate(data, bots, authorized, tracking_valid):
     status = "Unaddressed"
     reason = "No authorized disposition reply"
     if latest:
-      comment, fields = latest
+      _, fields = latest
       status = fields.get("disposition", "Unaddressed")
       reason = fields.get("error", "")
-      if comment["updatedAt"] < reviewer_activity:
-        reason = "Review comment changed after disposition; reply again"
-      elif not reason and status == "Accepted":
+      if not reason and status == "Accepted":
         fix = fields.get("fix", "")
         link = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/commit/([^/]+)", fix)
         if link and link[1].lower() == data["repository"].lower():
@@ -262,22 +231,16 @@ def passed(result):
 
 
 def summary(number, head, result):
-  counts = Counter(f["status"] for f in result["findings"])
-  remaining = sum(bool(f["error"]) for f in result["findings"])
+  blocked = [f for f in result["findings"] if f["error"]]
   lines = [
     f"## PR #{number} · AI Review Disposition",
     "",
     f"Head: `{head}`",
     "",
-    f"Findings: {len(result['findings'])}; unresolved requirements: {remaining}",
-    "",
-    "| Accepted | Rejected | Deferred | Invalid | Unaddressed |",
-    "| --- | --- | --- | --- | --- |",
-    "| " + " | ".join(str(counts[s]) for s in (*STATUSES, "Unaddressed")) + " |",
+    f"Findings: {len(result['findings'])}; unresolved requirements: {len(blocked)}",
     "",
   ]
   lines.extend(f"- {error}" for error in result["errors"])
-  blocked = [f for f in result["findings"] if f["error"]]
   for finding in blocked[:100]:
     lines.append(f"- [{finding['status']}]({finding['url']}): {finding['error']}")
   if len(blocked) > 100:
@@ -295,40 +258,36 @@ def check_pr(api, repository, number, bots):
     f"/repos/{repository}/check-runs",
     {"name": CHECK_NAME, "head_sha": head, "status": "in_progress"},
   )
-  permissions = {}
-  tracking = {}
 
+  @cache
   def authorized(login, author):
     if login == author:
       return True
-    if login not in permissions:
-      try:
-        response = api.request(
-          "GET", f"/repos/{repository}/collaborators/{quote(login, safe='')}/permission"
-        )
-        permissions[login] = response["permission"] in {"admin", "maintain", "write"}
-      except HTTPError as error:
-        if error.code != 404:
-          raise
-        permissions[login] = False
-    return permissions[login]
-
-  def tracking_valid(value):
-    if value not in tracking:
-      match = re.fullmatch(
-        r"https://github\.com/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*)",
-        value,
+    try:
+      response = api.request(
+        "GET", f"/repos/{repository}/collaborators/{quote(login, safe='')}/permission"
       )
-      valid = False
-      if match:
-        try:
-          item = api.request("GET", f"/repos/{match[1]}")
-          valid = item["state"] == "open" and "pull_request" not in item
-        except HTTPError as error:
-          if error.code != 404:
-            raise
-      tracking[value] = valid
-    return tracking[value]
+      return response["permission"] in {"admin", "write"}
+    except HTTPError as error:
+      if error.code != 404:
+        raise
+      return False
+
+  @cache
+  def tracking_valid(value):
+    match = re.fullmatch(
+      r"https://github\.com/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*)",
+      value,
+    )
+    if not match:
+      return False
+    try:
+      item = api.request("GET", f"/repos/{match[1]}")
+      return item["state"] == "open" and "pull_request" not in item
+    except HTTPError as error:
+      if error.code != 404:
+        raise
+      return False
 
   try:
     data = snapshot(api, repository, number)

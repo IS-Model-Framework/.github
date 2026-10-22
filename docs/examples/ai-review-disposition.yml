@@ -10,8 +10,6 @@ on:
     types: [completed]
   issue_comment:
     types: [created, edited, deleted]
-  repository_dispatch:
-    types: [ai-review-state-changed]
   workflow_dispatch:
     inputs:
       pr-number:
@@ -35,11 +33,7 @@ jobs:
         ${{ github.event.pull_request.number
             || github.event.issue.number
             || inputs.pr-number
-            || github.event.client_payload.pr_number
             || fromJSON(github.event.workflow_run.display_title || '0') }}
       # Set this repository/organization variable to exact bot logins.
       bot-logins: ${{ vars.AI_REVIEW_BOTS }}
       shared-ref: main
-    # If the shared CI repository is private:
-    # secrets:
-    #   shared-read-token: ${{ secrets.CI_READ_TOKEN }}
