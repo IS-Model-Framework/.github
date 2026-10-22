@@ -21,6 +21,17 @@ from scripts.check_ai_review_disposition import (
 HEAD = "a" * 40
 FIX = "b" * 40
 BOT = "reviewer[bot]"
+CODEX = "chatgpt-codex-connector[bot]"
+CODEX_SUMMARY = (
+  "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+  "| Review | Status | Commit | Review trigger |\n"
+  "| --- | --- | --- | --- |\n"
+  "| 📝 **Code Review** | ✅ **Completed** "
+  '<relative-time datetime="2026-10-14T09:05:35Z">'
+  "2026-10-14T09:05:35Z</relative-time> | `7a7a473` | PR opened |"
+)
+INFISCALE_COMPLETE = "未发现本次 PR 引入的新问题。LGTM！"  # noqa: RUF001
+INFISCALE_START = "收到，开始 review"  # noqa: RUF001
 
 
 def comment(body, login="contributor", timestamp="2026-10-09T02:00:00Z"):
@@ -48,13 +59,14 @@ def fixture(body=None, resolved=True, reviewer=BOT):
     "reviews": [
       {
         "id": "review-1",
-        "body": f"AI-Review-Complete: {HEAD}",
+        "body": "",
         "state": "COMMENTED",
         "submittedAt": "2026-10-09T01:30:00Z",
         "author": {"login": BOT},
         "commit": {"oid": HEAD},
       }
     ],
+    "comments": [],
     "threads": [
       {
         "id": "thread-1",
@@ -127,7 +139,9 @@ class PolicyTests(unittest.TestCase):
         f"https://github.com/ORG/REPO/commit/{FIX.upper()}",
       ):
         with self.subTest(reviewer=reviewer, fix=fix):
-          data = fixture(f"Disposition: Accepted\nReason: Fixed\nFix: {fix}", reviewer=reviewer)
+          data = fixture(
+            f"Disposition: Accepted\nReason: Fixed\nFix: {fix}", reviewer=reviewer
+          )
           self.assertTrue(passed(result(data)))
           self.assertEqual(len(result(data)["findings"]), 1)
 
@@ -184,7 +198,9 @@ class PolicyTests(unittest.TestCase):
   def test_latest_explicit_reply_supersedes_old_valid_reply(self):
     for reviewer in (BOT, "human-reviewer"):
       with self.subTest(reviewer=reviewer):
-        data = fixture("Disposition: Rejected\nReason: Covered upstream", reviewer=reviewer)
+        data = fixture(
+          "Disposition: Rejected\nReason: Covered upstream", reviewer=reviewer
+        )
         data["threads"][0]["comments"].append(
           comment("Disposition: Accepted", timestamp="2026-10-09T03:00:00Z")
         )
@@ -205,28 +221,29 @@ class PolicyTests(unittest.TestCase):
     data["threads"][0]["comments"][0]["updatedAt"] = "2026-10-09T03:00:00Z"
     self.assertIn("changed", result(data)["findings"][0]["error"])
 
-  def test_missing_old_dismissed_or_incomplete_review_blocks(self):
-    for mode in ("missing", "old", "dismissed", "incomplete", "pending"):
-      with self.subTest(mode=mode):
+  def test_missing_pending_or_dismissed_review_blocks(self):
+    for state in (None, "DISMISSED", "PENDING"):
+      with self.subTest(state=state):
         data = fixture("Disposition: Invalid\nReason: False positive")
-        if mode == "missing":
+        if state is None:
           data["reviews"] = []
-        elif mode == "old":
-          data["reviews"][0]["commit"]["oid"] = FIX
-        elif mode == "dismissed":
-          data["reviews"][0]["state"] = "DISMISSED"
-        elif mode == "pending":
-          data["reviews"][0]["state"] = "PENDING"
         else:
-          data["reviews"][0]["body"] = "No problems"
+          data["reviews"][0]["state"] = state
         self.assertFalse(passed(result(data)))
 
-  def test_later_unfinished_review_supersedes_completion(self):
+  def test_published_review_needs_neither_current_head_nor_custom_marker(self):
+    for state in ("COMMENTED", "APPROVED", "CHANGES_REQUESTED"):
+      with self.subTest(state=state):
+        data = fixture("Disposition: Invalid\nReason: False positive")
+        data["reviews"][0].update(state=state, body="", commit={"oid": FIX})
+        self.assertTrue(passed(result(data)))
+
+  def test_later_pending_review_does_not_erase_a_published_review(self):
     data = fixture("Disposition: Invalid\nReason: False positive")
     review = copy.deepcopy(data["reviews"][0])
-    review.update(id="review-2", body="Working", submittedAt="2026-10-09T03:00:00Z")
+    review.update(id="review-2", state="PENDING", submittedAt=None)
     data["reviews"].append(review)
-    self.assertFalse(passed(result(data)))
+    self.assertTrue(passed(result(data)))
 
   def test_zero_findings_pass_only_after_review_completion(self):
     data = fixture()
@@ -238,6 +255,68 @@ class PolicyTests(unittest.TestCase):
   def test_every_configured_bot_must_complete_review(self):
     data = fixture("Disposition: Invalid\nReason: False positive")
     self.assertFalse(passed(result(data, bots={BOT, "another[bot]"})))
+
+  def test_both_bots_can_complete_without_findings(self):
+    data = fixture()
+    data.update(reviews=[], threads=[])
+    bots = {CODEX, "infiscale-bot"}
+    data["comments"] = [comment(CODEX_SUMMARY, CODEX)]
+    self.assertFalse(passed(result(data, bots=bots)))
+    data["comments"].append(comment(INFISCALE_COMPLETE, "infiscale-bot"))
+    evaluation = result(data, bots=bots)
+    self.assertTrue(passed(evaluation))
+    self.assertEqual(evaluation["findings"], [])
+    data["threads"] = fixture(reviewer="human-reviewer")["threads"]
+    self.assertFalse(passed(result(data, bots=bots)))
+
+  def test_completion_comments_require_the_exact_bot_and_success_format(self):
+    cases = (
+      (CODEX, CODEX_SUMMARY, True),
+      (CODEX, CODEX_SUMMARY.replace("✅ **Completed**", "⚠️ **Failed**"), False),
+      (CODEX, CODEX_SUMMARY.replace("✅ **Completed**", "⏳ **In progress**"), False),
+      (CODEX, CODEX_SUMMARY.replace("**Code Review**", "**Security Review**"), False),
+      (
+        CODEX,
+        CODEX_SUMMARY.replace("<!-- codex-pull-request-review-summary -->", ""),
+        False,
+      ),
+      (CODEX, "Codex usage limits have been reached for code reviews.", False),
+      (CODEX, "Completed", False),
+      (CODEX, INFISCALE_COMPLETE, False),
+      ("infiscale-bot", INFISCALE_COMPLETE, True),
+      ("infiscale-bot", "\n" + INFISCALE_COMPLETE + "\n", True),
+      ("infiscale-bot", INFISCALE_START, False),
+      ("infiscale-bot", "review failed", False),
+      ("infiscale-bot", "LGTM!", False),
+      ("infiscale-bot", CODEX_SUMMARY, False),
+    )
+    for bot, body, expected in cases:
+      for author in (bot, "contributor", "other-bot"):
+        with self.subTest(bot=bot, body=body, author=author):
+          data = fixture()
+          data.update(reviews=[], threads=[], comments=[comment(body, author)])
+          self.assertEqual(passed(result(data, bots={bot})), expected and author == bot)
+
+  def test_quoted_completion_text_does_not_count(self):
+    for bot, body in ((CODEX, CODEX_SUMMARY), ("infiscale-bot", INFISCALE_COMPLETE)):
+      for quoted in ("> " + body, "```\n" + body + "\n```", "Example:\n" + body):
+        with self.subTest(bot=bot, body=quoted):
+          data = fixture()
+          data.update(reviews=[], threads=[], comments=[comment(quoted, bot)])
+          self.assertFalse(passed(result(data, bots={bot})))
+
+  def test_infiscale_start_comment_does_not_replace_a_published_review(self):
+    data = fixture("Disposition: Invalid\nReason: Test", reviewer="infiscale-bot")
+    data["reviews"][0]["author"] = {"login": "infiscale-bot", "__typename": "User"}
+    data["comments"] = [comment(INFISCALE_START, "infiscale-bot")]
+    self.assertTrue(passed(result(data, bots={"infiscale-bot"})))
+
+  def test_codex_completion_accepts_graphql_bot_login_without_suffix(self):
+    data = fixture()
+    completed = comment(CODEX_SUMMARY, CODEX)
+    completed["author"] = {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+    data.update(reviews=[], threads=[], comments=[completed])
+    self.assertTrue(passed(result(data, bots={CODEX})))
 
   def test_graphql_bot_login_without_suffix_is_canonicalized(self):
     data = fixture("Disposition: Invalid\nReason: False positive")
@@ -253,12 +332,12 @@ class PolicyTests(unittest.TestCase):
     data["reviews"][0]["author"] = {"login": "reviewer", "__typename": "User"}
     self.assertFalse(passed(result(data)))
 
-  def test_new_finding_after_completion_requires_new_marker(self):
+  def test_new_finding_requires_disposition_without_requiring_a_new_review(self):
     data = fixture("Disposition: Invalid\nReason: False positive")
     data["threads"][0]["comments"][0]["updatedAt"] = "2026-10-09T01:45:00Z"
-    self.assertFalse(passed(result(data)))
-    data["reviews"][0]["submittedAt"] = "2026-10-09T01:50:00Z"
     self.assertTrue(passed(result(data)))
+    data["threads"].append(fixture()["threads"][0])
+    self.assertFalse(passed(result(data)))
 
   def test_human_findings_require_complete_dispositions(self):
     for body in (
@@ -279,9 +358,7 @@ class PolicyTests(unittest.TestCase):
   def test_human_findings_keep_resolve_and_reply_permissions(self):
     for resolved, login in ((False, "contributor"), (True, "stranger"), (True, BOT)):
       with self.subTest(resolved=resolved, login=login):
-        data = fixture(
-          "Disposition: Invalid\nReason: Test", resolved, "human-reviewer"
-        )
+        data = fixture("Disposition: Invalid\nReason: Test", resolved, "human-reviewer")
         data["threads"][0]["comments"][-1]["author"]["login"] = login
         data["threads"][0]["isOutdated"] = True
         evaluation = result(data)
@@ -351,7 +428,7 @@ class PolicyTests(unittest.TestCase):
     human_review.update(author={"login": "human-reviewer"}, body="General feedback")
     data["reviews"].append(human_review)
     self.assertTrue(passed(result(data)))
-    data["reviews"][0]["body"] = ""
+    data["reviews"].pop(0)
     self.assertFalse(passed(result(data)))
 
   def test_unaddressed_human_finding_blocks_an_addressed_ai_finding(self):
@@ -412,9 +489,7 @@ class ApiTests(unittest.TestCase):
       return io.BytesIO(json.dumps(responses[len(calls) - 1]).encode())
 
     with patch("scripts.check_ai_review_disposition.urlopen", side_effect=respond):
-      self.assertEqual(
-        api.request("GET", "/repos/org/repo/pulls/313"), {"number": 313}
-      )
+      self.assertEqual(api.request("GET", "/repos/org/repo/pulls/313"), {"number": 313})
       self.assertEqual(
         api.graphql("query { viewer { login } }", {}),
         {"viewer": {"login": "reviewer"}},
@@ -459,10 +534,12 @@ class ApiTests(unittest.TestCase):
       },
       {"nodes": [100], "pageInfo": {"hasNextPage": False, "endCursor": None}},
     ]
-    responses = [{"repository": {"pullRequest": {"reviews": p}}} for p in pages]
-    with patch.object(api, "graphql", side_effect=responses) as graphql:
-      self.assertEqual(len(api.connection("org/repo", 128, "reviews", "id")), 101)
-      self.assertEqual(graphql.call_args.args[1]["cursor"], "next")
+    for field in ("reviews", "comments"):
+      with self.subTest(field=field):
+        responses = [{"repository": {"pullRequest": {field: p}}} for p in pages]
+        with patch.object(api, "graphql", side_effect=responses) as graphql:
+          self.assertEqual(len(api.connection("org/repo", 128, field, "id")), 101)
+          self.assertEqual(graphql.call_args.args[1]["cursor"], "next")
 
   def test_long_thread_comments_are_paginated(self):
     api = GitHub("test-token")
@@ -506,6 +583,21 @@ class ApiTests(unittest.TestCase):
     ):
       self.assertEqual(snapshot(api, "org/repo", 128)["repository"], "org/repo")
 
+  def test_snapshot_reads_top_level_comments_for_completion(self):
+    pr = {"head": {"sha": HEAD}, "user": {"login": "contributor"}, "state": "open"}
+    api = GitHub("test-token")
+    completed = comment(INFISCALE_COMPLETE, "infiscale-bot")
+    with (
+      patch.object(api, "request", return_value=pr),
+      patch.object(
+        api, "connection", side_effect=[[], [completed], [], []]
+      ) as connection,
+    ):
+      data = snapshot(api, "org/repo", 128)
+    self.assertEqual(data["comments"], [completed])
+    self.assertEqual(connection.call_args_list[1].args[2], "comments")
+    self.assertNotIn("pullRequestReview", connection.call_args_list[1].args[3])
+
   def test_commit_link_does_not_add_api_requests(self):
     for reviewer in (BOT, "human-reviewer"):
       with self.subTest(reviewer=reviewer):
@@ -535,6 +627,15 @@ class ApiTests(unittest.TestCase):
         calls, ok = self.run_check([data, changed])
         self.assertFalse(ok)
         self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+
+  def test_completion_comment_changed_during_read_prevents_success(self):
+    data = fixture("Disposition: Invalid\nReason: Test")
+    data["comments"] = [comment(INFISCALE_COMPLETE, "infiscale-bot")]
+    changed = copy.deepcopy(data)
+    changed["comments"][0]["body"] = INFISCALE_START
+    calls, ok = self.run_check([data, changed])
+    self.assertFalse(ok)
+    self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
 
   def test_api_failure_finishes_check_as_failure(self):
     calls, ok = self.run_check(RuntimeError("failed"))
@@ -610,7 +711,9 @@ class ApiTests(unittest.TestCase):
     data["threads"].append(other)
     calls, ok = self.run_check([data, copy.deepcopy(data)], {"state": "open"})
     self.assertTrue(ok)
-    issue_reads = [c for c in calls if c.args[:2] == ("GET", "/repos/org/repo/issues/42")]
+    issue_reads = [
+      c for c in calls if c.args[:2] == ("GET", "/repos/org/repo/issues/42")
+    ]
     self.assertEqual(len(issue_reads), 1)
 
   def run_check(self, snapshots, issue=None):
@@ -638,7 +741,9 @@ class MainTests(unittest.TestCase):
         sys, "argv", ["checker", "--repository", "org/repo", "--bots", BOT, *arguments]
       ),
       patch("scripts.check_ai_review_disposition.GitHub") as client,
-      patch("scripts.check_ai_review_disposition.check_pr", return_value=passed) as check,
+      patch(
+        "scripts.check_ai_review_disposition.check_pr", return_value=passed
+      ) as check,
       patch("sys.stderr", new_callable=io.StringIO),
     ):
       return main(), client, check
@@ -647,9 +752,7 @@ class MainTests(unittest.TestCase):
     code, client, check = self.run_main("--pr-number", "313")
     self.assertEqual(code, 0)
     client.assert_called_once_with("test-token")
-    check.assert_called_once_with(
-      client.return_value, "org/repo", 313, {BOT}
-    )
+    check.assert_called_once_with(client.return_value, "org/repo", 313, {BOT})
     client.return_value.open_prs.assert_not_called()
 
   def test_target_pr_failure_sets_exit_code(self):

@@ -109,8 +109,9 @@ def snapshot(api, repository, number):
     repository,
     number,
     "reviews",
-    f"id body state submittedAt {AUTHOR_FIELDS} commit {{ oid }}",
+    f"id state {AUTHOR_FIELDS}",
   )
+  comments = api.connection(repository, number, "comments", f"id body {AUTHOR_FIELDS}")
   threads = api.connection(
     repository,
     number,
@@ -130,6 +131,7 @@ def snapshot(api, repository, number):
     "author": pr["user"]["login"].lower(),
     "state": current["state"],
     "reviews": reviews,
+    "comments": comments,
     "threads": threads,
     "commits": [node["commit"]["oid"] for node in commits],
   }
@@ -164,24 +166,33 @@ def evaluate(data, bots, authorized, tracking_valid):
   """Pure policy; API-dependent identity and tracking checks are supplied by caller."""
   errors = []
   findings = []
-  completed_at = {}
   for bot in sorted(bots):
-    reviews = [
-      review
+    reviewed = any(
+      actor_login(review.get("author")) == bot
+      and review["state"] in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
       for review in data["reviews"]
-      if actor_login(review.get("author")) == bot and review["state"] != "PENDING"
-    ]
-    latest = max(reversed(reviews), key=lambda r: r["submittedAt"] or "", default=None)
-    marker = f"AI-Review-Complete: {data['head']}"
-    if (
-      not latest
-      or latest["state"] == "DISMISSED"
-      or (latest.get("commit") or {}).get("oid") != data["head"]
-      or marker not in [line.strip() for line in latest["body"].splitlines()]
-    ):
-      errors.append(f"{bot}: missing completed review for current head")
-    else:
-      completed_at[bot] = latest["submittedAt"]
+    )
+    completed = any(
+      actor_login(comment.get("author")) == bot
+      and (
+        (
+          bot == "infiscale-bot"
+          and comment["body"].strip() == "未发现本次 PR 引入的新问题。LGTM！"  # noqa: RUF001
+        )
+        or (
+          bot == "chatgpt-codex-connector[bot]"
+          and comment["body"].startswith("<!-- codex-pull-request-review-summary -->\n")
+          and re.search(
+            r"(?m)^\| 📝 \*\*Code Review\*\* \| ✅ \*\*Completed\*\*"
+            r"(?: <relative-time [^\r\n|]*</relative-time>)? \|",
+            comment["body"],
+          )
+        )
+      )
+      for comment in data["comments"]
+    )
+    if not reviewed and not completed:
+      errors.append(f"{bot}: missing published review or successful completion comment")
 
   for thread in data["threads"]:
     comments = [
@@ -198,14 +209,6 @@ def evaluate(data, bots, authorized, tracking_valid):
       or reviewer == data["author"]
     ):
       continue
-    for bot in bots:
-      if bot in completed_at and any(
-        actor_login(c.get("author")) == bot and c["updatedAt"] > completed_at[bot]
-        for c in comments
-      ):
-        error = f"{bot}: findings changed after review completion"
-        if error not in errors:
-          errors.append(error)
     reviewer_activity = root["updatedAt"]
     if reviewer in bots:
       reviewer_activity = max(

@@ -9,14 +9,14 @@
 ## 合并条件
 
 ```text
-每个指定 AI Bot 已完成当前 head SHA 的 review
+每个指定 AI Bot 已在该 PR 发布有效 Review 或明确的成功结束评论
 AND 每个纳入范围的 AI / 人工行内意见有授权人员的有效 disposition
 AND 每个 finding 的 conversation 已 Resolve
 ```
 
 检查范围为配置的 Bot，以及 PR 作者之外的人工 reviewer 创建的所有已发布 inline review threads，包括历史提交上的 outdated threads 和已 Resolve 的 threads。每个 thread 是一条 finding，不同问题应分成不同 threads；AI 和人工意见共用以下模板、证据、回复权限和 Resolve 要求。PR 作者自行创建的人工 thread、未配置的 GitHub Bot thread、PR 顶层普通评论和 Review 总评不计为 finding。尚未提交的 pending review 不计入已发布 findings。
 
-Bot 由精确 GitHub login 匹配，例如 `reviewer[bot]`；不根据显示名、正文或模糊子串识别。GraphQL 的 `Bot` 类型若返回不带后缀的 login，会转换成标准 `[bot]` 格式；普通 `User` 不做此转换。配置的 Bot 优先按 AI 处理，即使其账号类型是 `User`（如 `infiscale-bot`）或恰好是 PR 作者。其他 `User` 按人工账号处理。`AI_REVIEW_BOTS` 中的每个 Bot 都必须完成 review；人工 reviewer 不需要完成标记。空配置是错误，不会当作“无 AI 问题”通过。本次只扩展意见范围，未修改 AI Bot 完成协议。
+Bot 由精确 GitHub login 匹配，例如 `reviewer[bot]`；不根据显示名、正文或模糊子串识别。GraphQL 的 `Bot` 类型若返回不带后缀的 login，会转换成标准 `[bot]` 格式；普通 `User` 不做此转换。配置的 Bot 优先按 AI 处理，即使其账号类型是 `User`（如 `infiscale-bot`）或恰好是 PR 作者。其他 `User` 按人工账号处理。`AI_REVIEW_BOTS` 中的每个 Bot 都必须有审查结果；人工 reviewer 不需要完成标记。空配置是错误，不会当作“无 AI 问题”通过。
 
 回复者必须是 PR 作者或当前拥有仓库 `write` / `maintain` / `admin` 权限的人员。其他人员的回复不生效；GitHub Bot 和已配置的 AI 服务账号不能自行 disposition。仅有组织成员身份不足以授权回复。
 
@@ -67,25 +67,27 @@ Tracking: https://github.com/IS-Model-Framework/example/issues/42
 
 `Tracking` 只接受 `https://github.com/owner/repo/issues/number` 形式的完整 Issue 链接，不接受其他站点、裸编号、PR 链接、查询参数或锚点。检查器会实际调用 GitHub Issues API；不存在、已关闭、无法读取的 Issue，以及限流、鉴权或服务错误都不会通过。允许引用其他仓库的 Issue，但当前 token 必须能读取；其他仓库的私有 Issue 可能需要 GitHub App installation token。
 
-采用最新编辑时间的明确 disposition 回复；同一时间取 thread 中更后的回复。新的不完整 disposition 会替代旧的有效回复，避免沿用过期决定。普通交流回复不会替代 disposition。人工线程只在原始审查意见的编辑时间晚于模板回复时要求重新确认；reviewer 后续追加“好的”“谢谢”或普通讨论不会使已有模板失效。新问题应新开线程或编辑原始意见。AI 线程仍按原有规则处理 AI 的编辑和追加回复，AI 完成协议不变；人工 reviewer 不需要完成标记。修复提交被 force-push 移出 PR 后，Accepted 的 SHA 和链接两种格式都失效。
+采用最新编辑时间的明确 disposition 回复；同一时间取 thread 中更后的回复。新的不完整 disposition 会替代旧的有效回复，避免沿用过期决定。普通交流回复不会替代 disposition。人工线程只在原始审查意见的编辑时间晚于模板回复时要求重新确认；reviewer 后续追加“好的”“谢谢”或普通讨论不会使已有模板失效。新问题应新开线程或编辑原始意见。AI 线程仍按 AI 的编辑和追加回复时间要求重新确认；人工 reviewer 不需要完成标记。修复提交被 force-push 移出 PR 后，Accepted 的 SHA 和链接两种格式都失效。
 
 有效回复之后，由 Contributor / Maintainer Resolve Conversation；工具不会自动 Resolve。只 Resolve、只写 “done / 已修复”、在 PR 总结里统一回答，都不能通过。
 
-## AI Bot 完成协议
+## AI Bot 审查结果
 
-Bot 的 review 流程必须遵守：
+每个配置的 Bot 都必须满足以下任一条件：
 
-1. 对固定的 PR head SHA 生成 findings，用 inline threads 发布。
-2. 全部 findings 发布完毕后，提交一个非 pending 的 review，其正文包含独立一行：
+1. 该账号发布了有效 Review：状态为 `COMMENTED`、`APPROVED` 或 `CHANGES_REQUESTED`。允许正文为空；`PENDING` 和 `DISMISSED` 不算有效结果。
+2. 该账号发布了可识别的成功结束评论。当前支持以下两种固定格式，普通评论和开始、失败、配额不足提示均不算完成：
 
-   ```text
-   AI-Review-Complete: <当前 PR 的完整 head SHA>
-   ```
+   | Bot login | 成功结束评论 |
+   | --- | --- |
+   | `infiscale-bot` | 去除首尾空白后，全文为 `未发现本次 PR 引入的新问题。LGTM！` |
+   | `chatgpt-codex-connector[bot]` | Codex 自带摘要，以 `<!-- codex-pull-request-review-summary -->` 开头，且 `Code Review` 行状态为 `✅ **Completed**` |
 
-3. review 本身的 `commit.oid` 也必须等于该 SHA。没有 findings 时仍需要这个 review；这样“零问题”和“尚未开始 review”不会混淆。
-4. 当前 head 改变后，重新 review 并提交新完成标记。后续提交的新 review 未含标记、review 被 dismissed，或者 Bot 在完成标记之后继续增加/编辑 finding，均阻断通过。
+`infiscale-bot` 的 `收到，开始 review` 不算完成。有意见时，以它发布的正式 Review 为结果；无意见时，以约定的 LGTM 评论为结果。此规则依赖 Bot 在全部意见发布完毕时才提交 Review 或成功结束评论，不能在开始阶段提前提交正式 Review。Codex 的 `Security Review` 完成不能代替 `Code Review` 完成。仅看评论正文不够，发布账号也必须匹配；人工引用、其他 Bot 和行内回复中的相同文字都不会被当作完成证据。
 
-这是本工具的集成协议，不是 GitHub 自带的字段。现有 Bot 若不能提供该标记，需要修改其发布流程；不能仅凭 “没有 unresolved threads” 推断 review 已完成。不要在 findings 尚未全部发布时写入完成标记。
+以 PallasKernels 为例，将 `AI_REVIEW_BOTS` 设置为 `chatgpt-codex-connector[bot],infiscale-bot`，两者都必须有结果。其他配置的 Bot 可以使用正式 Review 路径；新增成功评论格式需要明确约定。
+
+审查结果按 PR 判断，不绑定当前 head SHA，也不要求自定义 `AI-Review-Complete` 标记。后续 push 不要求 Bot 重审；后续开始评论或 pending review 不会抹去已发布的有效结果。已有的有效 Review 全部被 dismissed，且没有成功结束评论时，会重新阻断。新增行内意见仍须回复和 Resolve，AI 意见变更仍须更新 disposition，但不要求再补交一次完成标记。检查器仍将 Check 写到当前 head，并在通过前重读数据，防止读取期间的提交、意见或完成评论变化。
 
 ## Actions 接入
 
@@ -136,13 +138,13 @@ flowchart LR
   A[PR / Review / Comment / Thread webhook] --> B[验证签名并按 PR 串行排队]
   B --> C[将当前 head 的固定 Check 标记 in_progress]
   C --> D[分页读取实时 reviews / threads / comments / commits]
-  D --> E{完成协议 + disposition + resolved}
+  D --> E{AI 审查结果 + disposition + resolved}
   E -->|满足| F[success]
   E -->|未满足或 API 失败| G[failure]
   F --> H[Human Review 与 Required Approval]
 ```
 
-App 应订阅 `pull_request`、`pull_request_review`、`pull_request_review_comment`、`pull_request_review_thread` 的相关 actions，并支持 Check rerequest；用 webhook signature 与 delivery ID 校验/去重，每个 PR 串行更新同一个 head 的 Check，变化时立即撤销旧 success。重试失败保持阻断，并以定期 reconciliation 恢复漏发/丢失事件。
+App 应订阅 `pull_request`、`pull_request_review`、`pull_request_review_comment`、`pull_request_review_thread`、`issue_comment` 的相关 actions，并支持 Check rerequest；用 webhook signature 与 delivery ID 校验/去重，每个 PR 串行更新同一个 head 的 Check，变化时立即撤销旧 success。重试失败保持阻断，并以定期 reconciliation 恢复漏发/丢失事件。
 
 权限为 Pull requests read、Contents read、Issues read、Checks write；安装 token 只覆盖获授权仓库。若调用跨仓库 Issue，需要相应仓库访问权限。当前提交未包含 App 的 webhook 服务、部署或持久化账本。
 
@@ -156,7 +158,7 @@ GitHub 的 Status Check 仍是异步状态，无法把“读所有评论”和�
 python -m unittest discover -s scripts/tests -v
 ```
 
-测试覆盖 AI / 人工行内意见的处理状态、回复权限、范围排除、意见变化后的重新确认、AI 完成协议、outdated/resolved threads、force-push、分页、API 错误与读取期间新增 findings，以及单 PR CLI、拒绝缺失/非法编号、closed PR 跳过、HTTP JSON 读写和跟踪 Issue 的真实存在性校验路径。API 通过 mock 验证；仍需在目标仓库做一次真实的 Bot / Human Review → 回复 → Resolve → 复查 → Required Check 试运行。
+测试覆盖 AI / 人工行内意见的处理状态、回复权限、范围排除、意见变化后的重新确认、AI Review / 成功结束评论识别、outdated/resolved threads、force-push、分页、API 错误与读取期间新增 findings 或完成评论变化，以及单 PR CLI、拒绝缺失/非法编号、closed PR 跳过、HTTP JSON 读写和跟踪 Issue 的真实存在性校验路径。API 通过 mock 验证；仍需在目标仓库做一次真实的 Bot / Human Review → 回复 → Resolve → 复查 → Required Check 试运行。
 
 - [GitHub Actions 事件与 fork / workflow_run 行为](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
 - [Webhook 事件：pull_request_review_thread](https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request_review_thread)
