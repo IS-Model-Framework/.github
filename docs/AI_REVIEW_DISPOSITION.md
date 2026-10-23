@@ -49,10 +49,9 @@ Tracking: N/A
 
 1. 将 [ai-review-events.yml](examples/ai-review-events.yml) 和 [ai-review-disposition.yml](examples/ai-review-disposition.yml) 复制到目标仓库 `.github/workflows/` 并合入默认分支。
 2. 设置组织/仓库 Variable `AI_REVIEW_BOTS`，如 `chatgpt-codex-connector[bot],infiscale-bot`。空值会报错，不提供隐式默认 Bot。
-3. 生产接入时，将 caller 中 `uses: ...@main` 和 `shared-ref: main` 同时固定到本公共 CI 仓库的同一个已审核 commit SHA。
-4. caller 需要 `contents: read`、`pull-requests: read`、`issues: read`、`checks: write`；不执行或检出 PR 代码。
-5. 首次运行后，将脚本发布的 **`AI Review / Disposition Check`** 加入组织/仓库 ruleset 的 Required Status Checks，来源选 GitHub Actions。不要选择 Actions job 的成功状态，事件的 `GITHUB_SHA` 不一定是 PR head。
-6. 在目标分支的 ruleset / 分支保护中启用 [**Require conversation resolution before merging**](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#require-a-pull-request-before-merging)，并保留人工 approval 要求。此项必须与 Required Status Check 同时配置；脚本不会修改仓库规则，也不会因未 resolved 而失败。
+3. caller 需要 `contents: read`、`pull-requests: read`、`issues: read`、`checks: write`；不执行或检出 PR 代码。
+4. 首次运行后，将脚本发布的 **`AI Review / Disposition Check`** 加入组织/仓库 ruleset 的 Required Status Checks，来源选 GitHub Actions。不要选择 Actions job 的成功状态，事件的 `GITHUB_SHA` 不一定是 PR head。
+5. 在目标分支的 ruleset / 分支保护中启用 [**Require conversation resolution before merging**](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#require-a-pull-request-before-merging)，并保留人工 approval 要求。此项必须与 Required Status Check 同时配置；脚本不会修改仓库规则，也不会因未 resolved 而失败。
 
 PR opened/reopened/synchronize/ready_for_review 和 PR 顶层评论变化直接触发检查。Review/行内评论变化先运行无权限 collector，再通过默认分支的 `workflow_run` 触发检查器，因此 fork PR 也可复查。collector 的 `run-name` 必须保持为 PR 编号；该值仅用于路由，判定始终重新读取实时 API，不接受 collector 的代码、artifact 或审查结论。
 
