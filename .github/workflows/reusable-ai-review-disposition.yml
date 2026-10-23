@@ -1,0 +1,57 @@
+name: Reusable - AI Review Disposition
+
+on:
+  workflow_call:
+    inputs:
+      bot-logins:
+        description: 'Comma-separated GitHub logins; every bot must complete review'
+        required: true
+        type: string
+      pr-number:
+        description: 'Positive PR number to check in the caller repository'
+        required: true
+        type: number
+      shared-ref:
+        description: 'Trusted revision of this repository; pin alongside workflow uses'
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: write
+
+jobs:
+  disposition:
+    name: Evaluate AI Review Dispositions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Serialize updates for this PR only; every run reads its live API state.
+    concurrency:
+      group: ai-review-disposition-${{ github.repository }}-${{ inputs.pr-number }}
+      cancel-in-progress: false
+    steps:
+    - name: Checkout trusted shared scripts
+      uses: actions/checkout@v4
+      with:
+        repository: IS-Model-Framework/.github
+        ref: ${{ inputs.shared-ref }}
+        path: .ci-shared
+        persist-credentials: false
+        sparse-checkout: scripts
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Publish check on the target PR head commit
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        python .ci-shared/scripts/check_ai_review_disposition.py \
+          --pr-number "$PR_NUMBER"

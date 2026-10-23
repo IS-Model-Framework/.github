@@ -1,0 +1,19 @@
+# Copy to each project's .github/workflows/ai-review-events.yml.
+# This unprivileged collector never checks out or executes PR code.
+name: AI Review Events
+# Pass the PR number through workflow_run.display_title; do not use the PR title.
+run-name: ${{ github.event.pull_request.number }}
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+    - run: echo "AI review state changed; trusted evaluator will read live API state"

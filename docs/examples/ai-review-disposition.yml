@@ -1,0 +1,39 @@
+# Copy to each project's .github/workflows/ai-review-disposition.yml.
+# Both this file and the event collector must exist on the default branch.
+name: AI Review Disposition
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: [AI Review Events]
+    types: [completed]
+  issue_comment:
+    types: [created, edited, deleted]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: 'Positive PR number to recheck'
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: write
+
+jobs:
+  disposition:
+    if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request }}
+    uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
+    with:
+      # Collector run-name is the PR number, even when workflow_run.pull_requests is empty.
+      pr-number: >-
+        ${{ github.event.pull_request.number
+            || github.event.issue.number
+            || inputs.pr-number
+            || fromJSON(github.event.workflow_run.display_title || '0') }}
+      # Set this repository/organization variable to exact bot logins.
+      bot-logins: ${{ vars.AI_REVIEW_BOTS }}
+      shared-ref: main
