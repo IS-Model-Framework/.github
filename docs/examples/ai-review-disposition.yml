@@ -34,29 +34,20 @@ permissions:
 jobs:
   disposition:
     if: >-
-      ${{ github.event_name != 'issues'
-          && !(github.event_name == 'workflow_dispatch' && inputs.all-open-prs)
-          && (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+      ${{ (github.event_name != 'issue_comment' || github.event.issue.pull_request)
           && (github.event_name != 'pull_request_target'
               || github.event.action != 'edited' || github.event.changes.base) }}
     uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
     with:
+      all-open-prs: >-
+        ${{ github.event_name == 'issues'
+            || (github.event_name == 'workflow_dispatch' && inputs.all-open-prs) }}
       # Collector run-name is the PR number, even when workflow_run.pull_requests is empty.
       pr-number: >-
         ${{ github.event.pull_request.number
-            || github.event.issue.number
+            || (github.event_name == 'issue_comment' && github.event.issue.number)
             || fromJSON(inputs.pr-number || '0')
             || fromJSON(github.event.workflow_run.display_title || '0') }}
       # Set this repository/organization variable to exact bot logins.
-      bot-logins: ${{ vars.AI_REVIEW_BOTS }}
-      shared-ref: main
-
-  issue-recheck:
-    if: >-
-      ${{ github.event_name == 'issues'
-          || (github.event_name == 'workflow_dispatch' && inputs.all-open-prs) }}
-    uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
-    with:
-      all-open-prs: true
       bot-logins: ${{ vars.AI_REVIEW_BOTS }}
       shared-ref: main

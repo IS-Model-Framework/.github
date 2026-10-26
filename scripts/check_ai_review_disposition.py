@@ -197,15 +197,6 @@ def codex_progress(comment):
   return timestamp(clock[1] if clock else fallback), completed
 
 
-def completion_comment(comment):
-  bot = actor_login(comment.get("author"))
-  body = comment["body"].replace("\r\n", "\n").strip()
-  if bot == "infiscale-bot":
-    return body == INFISCALE_COMPLETE
-  progress = codex_progress(comment) if bot == CODEX else None
-  return progress is not None and progress[1]
-
-
 def review_complete(data, bot):
   """Rounds for a bot do not overlap; a withdrawn round may use older evidence."""
   reviews = [r for r in data["reviews"] if actor_login(r.get("author")) == bot]
@@ -216,16 +207,17 @@ def review_complete(data, bot):
   ]
   progress = []
   for comment in comments:
-    if bot == "infiscale-bot" and infiscale_start(comment["body"]):
-      starts.append(timestamp(comment.get("createdAt")))
-    if bot == CODEX:
+    if bot == "infiscale-bot":
+      if infiscale_start(comment["body"]):
+        starts.append(timestamp(comment.get("createdAt")))
+      elif comment["body"].strip() == INFISCALE_COMPLETE:
+        completed.append(timestamp(comment.get("createdAt")))
+    elif bot == CODEX:
       status = codex_progress(comment)
       if status:
         progress.append(status)
         if status[1]:
           completed.append(status[0])
-    elif completion_comment(comment):
-      completed.append(timestamp(comment.get("createdAt")))
   latest_status = max(
     progress, key=lambda status: (status[0], not status[1]), default=None
   )

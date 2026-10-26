@@ -90,6 +90,23 @@ def result(data, bots=None, authorized=None, tracking_valid=None):
   )
 
 
+def pr_metadata(**changes):
+  return {
+    "node_id": "pr-1",
+    "head": {"sha": HEAD},
+    "user": {"login": "contributor"},
+    "state": "open",
+    **changes,
+  }
+
+
+def page(nodes, next_cursor=None):
+  return {
+    "nodes": nodes,
+    "pageInfo": {"hasNextPage": next_cursor is not None, "endCursor": next_cursor},
+  }
+
+
 class PolicyTests(unittest.TestCase):
   def test_all_dispositions_pass_independently_of_resolution(self):
     replies = [
@@ -613,11 +630,8 @@ class ApiTests(unittest.TestCase):
   def test_connections_read_more_than_100_nodes(self):
     api = GitHub("test-token")
     pages = [
-      {
-        "nodes": list(range(100)),
-        "pageInfo": {"hasNextPage": True, "endCursor": "next"},
-      },
-      {"nodes": [100], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+      page(list(range(100)), "next"),
+      page([100]),
     ]
     for field in ("reviews", "comments"):
       with self.subTest(field=field):
@@ -630,13 +644,10 @@ class ApiTests(unittest.TestCase):
     api = GitHub("test-token")
     thread = {
       "id": "thread-1",
-      "comments": {
-        "nodes": list(range(100)),
-        "pageInfo": {"hasNextPage": True, "endCursor": "next"},
-      },
+      "comments": page(list(range(100)), "next"),
     }
-    page = {"nodes": [100], "pageInfo": {"hasNextPage": False, "endCursor": None}}
-    with patch.object(api, "graphql", return_value={"node": {"comments": page}}):
+    last_page = page([100])
+    with patch.object(api, "graphql", return_value={"node": {"comments": last_page}}):
       comments = api.connection(
         thread["id"],
         "comments",
@@ -651,15 +662,7 @@ class ApiTests(unittest.TestCase):
   def test_snapshot_keeps_inline_replies_and_top_level_completion_separate(self):
     api = GitHub("test-token")
     data = fixture("Disposition: Invalid\nReason: Test")
-    pr = {
-      "node_id": "pr-1",
-      "head": {"sha": HEAD},
-      "user": {"login": data["author"]},
-      "state": "open",
-    }
-
-    def page(nodes):
-      return {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}
+    pr = pr_metadata(user={"login": data["author"]})
 
     thread = copy.deepcopy(data["threads"][0])
     thread["comments"] = page(thread["comments"])
@@ -694,15 +697,7 @@ class ApiTests(unittest.TestCase):
   def test_resolution_changes_during_check_do_not_block(self):
     api = GitHub("test-token")
     data = fixture("Disposition: Invalid\nReason: False positive")
-    pr = {
-      "node_id": "pr-1",
-      "head": {"sha": HEAD},
-      "user": {"login": data["author"]},
-      "state": "open",
-    }
-
-    def page(nodes):
-      return {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}
+    pr = pr_metadata(user={"login": data["author"]})
 
     for resolutions in ((False, True), (True, False)):
       with self.subTest(resolutions=resolutions):
@@ -743,12 +738,7 @@ class ApiTests(unittest.TestCase):
 
   def test_snapshot_rejects_head_change_during_read(self):
     api = GitHub("test-token")
-    before = {
-      "node_id": "pr-1",
-      "head": {"sha": HEAD},
-      "user": {"login": "contributor"},
-      "state": "open",
-    }
+    before = pr_metadata()
     after = {**before, "head": {"sha": FIX}}
     with (
       patch.object(api, "request", side_effect=[before, after]),
@@ -758,12 +748,7 @@ class ApiTests(unittest.TestCase):
       snapshot(api, "org/repo", 128)
 
   def test_snapshot_retains_repository_for_commit_link_validation(self):
-    pr = {
-      "node_id": "pr-1",
-      "head": {"sha": HEAD},
-      "user": {"login": "contributor"},
-      "state": "open",
-    }
+    pr = pr_metadata()
     api = GitHub("test-token")
     with (
       patch.object(api, "request", return_value=pr),
@@ -772,13 +757,9 @@ class ApiTests(unittest.TestCase):
       self.assertEqual(snapshot(api, "org/repo", 128)["repository"], "org/repo")
 
   def test_snapshot_rejects_base_change_but_ignores_unrelated_repo_metadata(self):
-    before = {
-      "node_id": "pr-1",
-      "head": {"sha": HEAD},
-      "base": {"ref": "main", "sha": FIX, "repo": {"description": "old"}},
-      "user": {"login": "contributor"},
-      "state": "open",
-    }
+    before = pr_metadata(
+      base={"ref": "main", "sha": FIX, "repo": {"description": "old"}}
+    )
     for base in ({"ref": "develop", "sha": FIX}, {"ref": "main", "sha": HEAD}):
       with self.subTest(base=base):
         api = GitHub("test-token")
@@ -799,12 +780,7 @@ class ApiTests(unittest.TestCase):
       )
 
   def test_snapshot_reads_top_level_comments_for_completion(self):
-    pr = {
-      "node_id": "pr-1",
-      "head": {"sha": HEAD},
-      "user": {"login": "contributor"},
-      "state": "open",
-    }
+    pr = pr_metadata()
     api = GitHub("test-token")
     completed = comment(INFISCALE_COMPLETE, "infiscale-bot")
     with (
