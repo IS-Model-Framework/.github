@@ -6,17 +6,22 @@ import json
 import os
 import re
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from functools import cache
-from urllib.error import HTTPError
+from threading import Lock
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 CHECK_NAME = "AI Review / Disposition Check"
 STATUSES = ("Accepted", "Rejected", "Deferred", "Invalid")
 AUTHOR_FIELDS = "author { login __typename }"
+EDIT_FIELDS = "editor { login __typename } lastEditedAt"
 COMMENT_FIELDS = f"""
-  id body url updatedAt {AUTHOR_FIELDS}
+  id body url updatedAt {AUTHOR_FIELDS} {EDIT_FIELDS}
   pullRequestReview {{ state }}
 """
 PAGE_FIELDS = "pageInfo { hasNextPage endCursor }"
@@ -24,6 +29,7 @@ CODEX = "chatgpt-codex-connector[bot]"
 CODEX_SUMMARY = "<!-- codex-pull-request-review-summary -->"
 PUBLISHED_REVIEWS = {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
 INFISCALE_COMPLETE = "未发现本次 PR 引入的新问题。LGTM！"  # noqa: RUF001
+JOURNAL_LOCK = Lock()
 
 
 def actor_login(author):
@@ -32,6 +38,12 @@ def actor_login(author):
   if author.get("__typename") == "Bot" and not login.endswith("[bot]"):
     login += "[bot]"
   return login
+
+
+def content_actor(comment):
+  if comment.get("lastEditedAt") or comment.get("editor"):
+    return comment.get("editor") or {}
+  return comment.get("author") or {}
 
 
 class GitHub:
@@ -49,8 +61,43 @@ class GitHub:
         "Content-Type": "application/json",
       },
     )
-    with urlopen(request, timeout=30) as response:
-      return json.load(response)
+    read_only = method == "GET" or (
+      method == "POST"
+      and path == "/graphql"
+      and re.match(r"\s*query\b", (body or {}).get("query", ""))
+    )
+    for attempt in range(3):
+      try:
+        with urlopen(request, timeout=30) as response:
+          return json.load(response)
+      except HTTPError as error:
+        retry_after = (error.headers or {}).get("Retry-After")
+        if (
+          not read_only
+          or attempt == 2
+          or not (
+            error.code in {429, 500, 502, 503, 504}
+            or (error.code == 403 and retry_after)
+          )
+        ):
+          raise
+        delay = 2**attempt
+        if retry_after:
+          try:
+            delay = max(0, float(retry_after))
+          except ValueError:
+            delay = max(
+              0,
+              (parsedate_to_datetime(retry_after) - datetime.now(UTC)).total_seconds(),
+            )
+        # Do not retry earlier than GitHub allows, or sleep without a bound.
+        if delay > 60:
+          raise
+        time.sleep(delay)
+      except (URLError, TimeoutError):
+        if not read_only or attempt == 2:
+          raise
+        time.sleep(2**attempt)
 
   def graphql(self, query, variables):
     result = self.request("POST", "/graphql", {"query": query, "variables": variables})
@@ -100,7 +147,9 @@ def snapshot(api, repository, number):
     pr["node_id"], "reviews", f"id state createdAt submittedAt {AUTHOR_FIELDS}"
   )
   comments = api.connection(
-    pr["node_id"], "comments", f"id body createdAt updatedAt {AUTHOR_FIELDS}"
+    pr["node_id"],
+    "comments",
+    f"id body createdAt updatedAt {AUTHOR_FIELDS} {EDIT_FIELDS}",
   )
   threads = api.connection(
     pr["node_id"],
@@ -118,6 +167,17 @@ def snapshot(api, repository, number):
       page=thread["comments"],
     )
   commits = api.connection(pr["node_id"], "commits", "commit { oid }")
+  commit_ids = [node["commit"]["oid"] for node in commits]
+  expected = pr.get("commits", len(commit_ids))
+  if len(commit_ids) != expected:
+    # PullRequest.commits silently stops at 250; paginated compare is BASE..HEAD.
+    base, head = pr["base"]["sha"], pr["head"]["sha"]
+    commit_ids = [
+      commit["sha"]
+      for commit in api.pages(f"/repos/{repository}/compare/{base}...{head}", "commits")
+    ]
+    if len(set(commit_ids)) != expected or head not in commit_ids:
+      raise RuntimeError("Incomplete PR commit comparison; refusing partial evidence")
   current = api.request("GET", f"/repos/{repository}/pulls/{number}")
 
   def revision(item):
@@ -135,7 +195,7 @@ def snapshot(api, repository, number):
     "reviews": reviews,
     "comments": comments,
     "threads": threads,
-    "commits": [node["commit"]["oid"] for node in commits],
+    "commits": commit_ids,
   }
 
 
@@ -207,6 +267,12 @@ def review_complete(data, bot):
   ]
   progress = []
   for comment in comments:
+    if bot in {"infiscale-bot", CODEX} and actor_login(content_actor(comment)) != bot:
+      changed = timestamp(comment.get("lastEditedAt") or comment.get("updatedAt"))
+      starts.append(changed)
+      if bot == CODEX:
+        progress.append((changed, False))
+      continue
     if bot == "infiscale-bot":
       if infiscale_start(comment["body"]):
         starts.append(timestamp(comment.get("createdAt")))
@@ -272,6 +338,14 @@ def evaluate(data, bots, authorized, tracking_valid):
         and login not in bots
         and authorized(login, data["author"])
       ):
+        editor = content_actor(comment)
+        editor_login = actor_login(editor)
+        if (
+          editor.get("__typename") != "User"
+          or editor_login in bots
+          or not authorized(editor_login, data["author"])
+        ):
+          fields["error"] = "Disposition edits require an authorized human editor"
         candidates.append((comment, fields))
     latest = max(reversed(candidates), key=lambda c: c[0]["updatedAt"], default=None)
     status = "Unaddressed"
@@ -368,11 +442,15 @@ def current_check(api, repository, number, head, check):
   return newest["id"] == check["id"]
 
 
-def check_pr(api, repository, number, bots):
-  pr = api.request("GET", f"/repos/{repository}/pulls/{number}")
-  if pr["state"] != "open":
-    return True
-  head = pr["head"]["sha"]
+def generation():
+  return (
+    int(os.environ.get("GITHUB_RUN_NUMBER", "0")),
+    int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+  )
+
+
+def register_check(api, repository, number, head, sequence=None):
+  run, attempt = sequence if sequence is not None else generation()
   check = api.request(
     "POST",
     f"/repos/{repository}/check-runs",
@@ -380,11 +458,118 @@ def check_pr(api, repository, number, bots):
       "name": CHECK_NAME,
       "head_sha": head,
       "status": "in_progress",
-      "external_id": f"ai-review-disposition:{number}:"
-      f"{os.environ.get('GITHUB_RUN_NUMBER', '0')}:"
-      f"{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}",
+      "external_id": f"ai-review-disposition:{number}:{run}:{attempt}",
     },
   )
+  journal = os.environ.get("AI_REVIEW_CHECKS_FILE")
+  if journal:
+    with JOURNAL_LOCK, open(journal, "a", encoding="utf-8") as stream:
+      stream.write(
+        json.dumps({"number": number, "head": head, "sequence": [run, attempt]}) + "\n"
+      )
+  return check
+
+
+def finish_pending(api, repository, number, head, sequence):
+  """Fence a failed run with a new Check ID so a late success cannot resurrect it."""
+  external_id = f"ai-review-disposition:{number}:{sequence[0]}:{sequence[1]}"
+  runs = api.pages(
+    f"/repos/{repository}/commits/{head}/check-runs"
+    f"?check_name={quote(CHECK_NAME, safe='')}&filter=all",
+    "check_runs",
+  )
+  own = [
+    run
+    for run in runs
+    if run.get("external_id") == external_id
+    and run["app"].get("slug") == "github-actions"
+  ]
+  if own and max(own, key=lambda run: run["id"])["status"] == "completed":
+    return True
+  check = register_check(api, repository, number, head, sequence)
+  if current_check(api, repository, number, head, check):
+    api.request(
+      "PATCH",
+      f"/repos/{repository}/check-runs/{check['id']}",
+      {
+        "status": "completed",
+        "conclusion": "failure",
+        "output": {
+          "title": "Evaluation interrupted",
+          "summary": "Evaluation interrupted; dispatch a new disposition check.",
+        },
+      },
+    )
+  return True
+
+
+def run_parallel(targets, operation):
+  """Bound API concurrency and keep processing after any target fails."""
+  ok = True
+  with ThreadPoolExecutor(max_workers=4) as pool:
+    futures = {pool.submit(operation, target): target for target in targets}
+    for future in as_completed(futures):
+      try:
+        ok = future.result() and ok
+      except Exception as error:
+        print(
+          f"Disposition target {futures[future]} failed ({type(error).__name__}); "
+          "check may remain in_progress; dispatch a new check.",
+          file=sys.stderr,
+        )
+        ok = False
+  return ok
+
+
+def cleanup_file(api, repository, path):
+  if not os.path.exists(path):
+    return True
+  with open(path, encoding="utf-8") as stream:
+    targets = {
+      (item["number"], item["head"], tuple(item["sequence"]))
+      for line in stream
+      if line.strip()
+      for item in [json.loads(line)]
+    }
+  return run_parallel(targets, lambda target: finish_pending(api, repository, *target))
+
+
+def recover_run(api, repository, run_id):
+  """Default-branch recovery also covers failures before Check registration."""
+  run = api.request("GET", f"/repos/{repository}/actions/runs/{run_id}")
+  if run["path"] != ".github/workflows/ai-review-disposition.yml":
+    raise ValueError("Recovery requires the documented caller workflow")
+  if run["status"] != "completed" or run["conclusion"] not in {
+    "failure",
+    "cancelled",
+    "timed_out",
+    "action_required",
+    "startup_failure",
+  }:
+    return True
+  title = run["display_title"]
+  if title == "all-open-prs":
+    prs = api.pages(f"/repos/{repository}/pulls?state=open")
+  elif re.fullmatch(r"[1-9][0-9]*", title):
+    prs = [api.request("GET", f"/repos/{repository}/pulls/{title}")]
+  else:
+    raise ValueError("Recovery requires a PR number or all-open-prs run-name")
+  sequence = (run["run_number"], run["run_attempt"])
+  targets = [
+    (pr["number"], pr["head"]["sha"], sequence) for pr in prs if pr["state"] == "open"
+  ]
+  return run_parallel(targets, lambda target: finish_pending(api, repository, *target))
+
+
+def check_pr(api, repository, number, bots, registered=None):
+  if registered is None:
+    pr = api.request("GET", f"/repos/{repository}/pulls/{number}")
+    if pr["state"] != "open":
+      return True
+    head = pr["head"]["sha"]
+    check = register_check(api, repository, number, head)
+  else:
+    head, check = registered
 
   @cache
   def authorized(login, author):
@@ -446,21 +631,32 @@ def check_pr(api, repository, number, bots):
     report = (
       f"PR #{number}: evaluation failed ({type(error).__name__}); rerun required."
     )
-  if not current_check(api, repository, number, head, check):
-    return True
-  api.request(
-    "PATCH",
-    f"/repos/{repository}/check-runs/{check['id']}",
-    {
-      "status": "completed",
-      "conclusion": "success" if ok else "failure",
-      "output": {"title": "Passed" if ok else "Failed", "summary": report[:60000]},
-    },
-  )
+  try:
+    if not current_check(api, repository, number, head, check):
+      return True
+    api.request(
+      "PATCH",
+      f"/repos/{repository}/check-runs/{check['id']}",
+      {
+        "status": "completed",
+        "conclusion": "success" if ok else "failure",
+        "output": {"title": "Passed" if ok else "Failed", "summary": report[:60000]},
+      },
+    )
+  except Exception as error:
+    print(
+      f"PR #{number}: could not publish Check #{check['id']} "
+      f"({type(error).__name__}); check may remain in_progress; dispatch a new check.",
+      file=sys.stderr,
+    )
+    return False
   # PR comment text is never emitted, including Actions workflow command sequences.
   print(report)
   if os.environ.get("GITHUB_STEP_SUMMARY"):
-    with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+    with (
+      JOURNAL_LOCK,
+      open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream,
+    ):
       stream.write(report + "\n\n")
   return ok
 
@@ -473,37 +669,63 @@ def main():
   target.add_argument(
     "--all-open-prs", action="store_true", help="Explicitly recheck every open PR"
   )
+  target.add_argument(
+    "--cleanup-file", help="Finish interrupted Checks from a trusted local journal"
+  )
+  target.add_argument(
+    "--recover-run", type=int, help="Recover an interrupted caller run"
+  )
   parser.add_argument("--bots", default=os.environ.get("AI_REVIEW_BOTS", ""))
   args = parser.parse_args()
   bots = {bot.strip().lower() for bot in args.bots.split(",") if bot.strip()}
   token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+  evaluating = not (args.cleanup_file or args.recover_run)
   if (
-    not bots
-    or any(not re.fullmatch(r"[a-z0-9-]+(?:\[bot\])?", bot) for bot in bots)
+    (
+      evaluating
+      and (
+        not bots
+        or any(not re.fullmatch(r"[a-z0-9-]+(?:\[bot\])?", bot) for bot in bots)
+      )
+    )
     or not args.repository
     or not re.fullmatch(r"[\w.-]+/[\w.-]+", args.repository)
     or (args.pr_number is not None and args.pr_number <= 0)
+    or (args.recover_run is not None and args.recover_run <= 0)
     or not token
   ):
     parser.error(
       "Valid repository, bot logins, token and a positive PR or explicit sweep required"
     )
   api = GitHub(token)
+  if args.cleanup_file:
+    return 0 if cleanup_file(api, args.repository, args.cleanup_file) else 1
+  if args.recover_run:
+    return 0 if recover_run(api, args.repository, args.recover_run) else 1
   if args.all_open_prs:
-    numbers = sorted({
-      pr["number"] for pr in api.pages(f"/repos/{args.repository}/pulls?state=open")
-    })
+    prs = {
+      pr["number"]: pr for pr in api.pages(f"/repos/{args.repository}/pulls?state=open")
+    }
+    registered = {}
     ok = True
-    for number in numbers:
+    # Block every target before any expensive review/Issue/permission reads.
+    for number, pr in sorted(prs.items()):
       try:
-        ok = check_pr(api, args.repository, number, bots) and ok
+        head = pr["head"]["sha"]
+        check = register_check(api, args.repository, number, head)
+        if current_check(api, args.repository, number, head, check):
+          registered[number] = (head, check)
       except Exception as error:
         print(
           f"PR #{number}: check failed ({type(error).__name__}); rerun required.",
           file=sys.stderr,
         )
         ok = False
-    return 0 if ok else 1
+    evaluated = run_parallel(
+      registered,
+      lambda number: check_pr(api, args.repository, number, bots, registered[number]),
+    )
+    return 0 if evaluated and ok else 1
   ok = check_pr(api, args.repository, args.pr_number, bots)
   return 0 if ok else 1
 

@@ -17,6 +17,11 @@ on:
         required: false
         type: boolean
         default: false
+      recover-run-id:
+        description: 'Interrupted caller run to recover; uses that run generation'
+        required: false
+        type: number
+        default: 0
       shared-ref:
         description: 'Revision of the shared CI scripts; defaults to main'
         required: false
@@ -24,6 +29,7 @@ on:
         default: main
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
   issues: read
@@ -33,11 +39,14 @@ jobs:
   disposition:
     name: Evaluate AI Review Dispositions
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # Keep the newest evaluation for this PR; other PRs run independently.
+    timeout-minutes: ${{ (inputs.all-open-prs || inputs.recover-run-id != 0) && 360 || 15 }}
+    # Sweeps must make progress; generation checks still reject older results.
     concurrency:
-      group: ai-review-disposition-${{ github.repository }}-${{ inputs.all-open-prs && 'all-open-prs' || inputs.pr-number }}
-      cancel-in-progress: true
+      group: ai-review-disposition-${{ github.repository }}-${{ inputs.recover-run-id && format('recover-{0}', inputs.recover-run-id) || (inputs.all-open-prs && 'all-open-prs' || inputs.pr-number) }}
+      cancel-in-progress: ${{ !inputs.all-open-prs && inputs.recover-run-id == 0 }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
     steps:
     - name: Checkout trusted shared scripts
       uses: actions/checkout@v4
@@ -59,9 +68,19 @@ jobs:
         AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
         PR_NUMBER: ${{ inputs.pr-number }}
         ALL_OPEN_PRS: ${{ inputs.all-open-prs }}
+        RECOVER_RUN_ID: ${{ inputs.recover-run-id }}
+        AI_REVIEW_CHECKS_FILE: ${{ runner.temp }}/ai-review-checks.jsonl
       run: |
-        if [[ "$ALL_OPEN_PRS" == "true" ]]; then
+        if [[ "$RECOVER_RUN_ID" != "0" ]]; then
+          python .ci-shared/scripts/check_ai_review_disposition.py --recover-run "$RECOVER_RUN_ID"
+        elif [[ "$ALL_OPEN_PRS" == "true" ]]; then
           python .ci-shared/scripts/check_ai_review_disposition.py --all-open-prs
         else
           python .ci-shared/scripts/check_ai_review_disposition.py --pr-number "$PR_NUMBER"
         fi
+
+    - name: Close interrupted checks registered by this job
+      if: ${{ always() && hashFiles('.ci-shared/scripts/check_ai_review_disposition.py') != '' }}
+      env:
+        AI_REVIEW_CHECKS_FILE: ${{ runner.temp }}/ai-review-checks.jsonl
+      run: python3 .ci-shared/scripts/check_ai_review_disposition.py --cleanup-file "$AI_REVIEW_CHECKS_FILE"

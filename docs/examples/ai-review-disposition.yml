@@ -1,6 +1,12 @@
 # Copy to each project's .github/workflows/ai-review-disposition.yml.
 # Both this file and the event collector must exist on the default branch.
 name: AI Review Disposition
+# Recovery reads this routing value if the run fails before publishing a Check.
+run-name: >-
+  ${{ (github.event_name == 'issues' || inputs.all-open-prs) && 'all-open-prs'
+      || github.event.pull_request.number
+      || (github.event_name == 'issue_comment' && github.event.issue.number)
+      || inputs.pr-number || github.event.workflow_run.display_title || '0' }}
 
 on:
   pull_request_target:
@@ -26,6 +32,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
   issues: read

@@ -1197,12 +1197,18 @@ class MainTests(unittest.TestCase):
       ),
       patch("scripts.check_ai_review_disposition.GitHub") as client,
       patch(
+        "scripts.check_ai_review_disposition.register_check", return_value={"id": 99}
+      ),
+      patch("scripts.check_ai_review_disposition.current_check", return_value=True),
+      patch(
         "scripts.check_ai_review_disposition.check_pr", return_value=passed
       ) as check,
       patch("sys.stderr", new_callable=io.StringIO),
     ):
       if numbers is not None:
-        client.return_value.pages.return_value = [{"number": n} for n in numbers]
+        client.return_value.pages.return_value = [
+          {"number": n, "head": {"sha": HEAD}} for n in numbers
+        ]
       if results is not None:
         check.side_effect = results
       return main(), client, check
@@ -1212,7 +1218,7 @@ class MainTests(unittest.TestCase):
       "--all-open-prs", passed=False, numbers=[24, 7, 24]
     )
     self.assertEqual(code, 1)
-    self.assertEqual([c.args[2] for c in check.call_args_list], [7, 24])
+    self.assertEqual(sorted(c.args[2] for c in check.call_args_list), [7, 24])
     client.return_value.pages.assert_called_once_with(
       "/repos/org/repo/pulls?state=open"
     )
@@ -1222,7 +1228,7 @@ class MainTests(unittest.TestCase):
       "--all-open-prs", numbers=[1, 2, 3], results=[RuntimeError("failed"), True, True]
     )
     self.assertEqual(code, 1)
-    self.assertEqual([c.args[2] for c in check.call_args_list], [1, 2, 3])
+    self.assertEqual(sorted(c.args[2] for c in check.call_args_list), [1, 2, 3])
 
   def test_empty_open_pr_sweep_does_not_publish_checks(self):
     code, _, check = self.run_main("--all-open-prs", numbers=[])
