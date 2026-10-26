@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Check one PR's AI review completion and dispositions without running PR code."""
+"""Check AI review rounds and dispositions without running PR code."""
 
 import argparse
 import json
 import os
 import re
 import sys
+from datetime import UTC, datetime
 from functools import cache
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -19,6 +20,10 @@ COMMENT_FIELDS = f"""
   pullRequestReview {{ state }}
 """
 PAGE_FIELDS = "pageInfo { hasNextPage endCursor }"
+CODEX = "chatgpt-codex-connector[bot]"
+CODEX_SUMMARY = "<!-- codex-pull-request-review-summary -->"
+PUBLISHED_REVIEWS = {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
+INFISCALE_COMPLETE = "未发现本次 PR 引入的新问题。LGTM！"  # noqa: RUF001
 
 
 def actor_login(author):
@@ -75,11 +80,28 @@ class GitHub:
       cursor = page["pageInfo"]["endCursor"]
       page = None
 
+  def pages(self, path, field=None):
+    """Read a REST list completely, including object-wrapped lists such as checks."""
+    nodes = []
+    separator = "&" if "?" in path else "?"
+    page = 1
+    while True:
+      response = self.request("GET", f"{path}{separator}per_page=100&page={page}")
+      items = response[field] if field else response
+      nodes.extend(items)
+      if len(items) < 100:
+        return nodes
+      page += 1
+
 
 def snapshot(api, repository, number):
   pr = api.request("GET", f"/repos/{repository}/pulls/{number}")
-  reviews = api.connection(pr["node_id"], "reviews", f"id state {AUTHOR_FIELDS}")
-  comments = api.connection(pr["node_id"], "comments", f"id body {AUTHOR_FIELDS}")
+  reviews = api.connection(
+    pr["node_id"], "reviews", f"id state createdAt submittedAt {AUTHOR_FIELDS}"
+  )
+  comments = api.connection(
+    pr["node_id"], "comments", f"id body createdAt updatedAt {AUTHOR_FIELDS}"
+  )
   threads = api.connection(
     pr["node_id"],
     "reviewThreads",
@@ -97,11 +119,17 @@ def snapshot(api, repository, number):
     )
   commits = api.connection(pr["node_id"], "commits", "commit { oid }")
   current = api.request("GET", f"/repos/{repository}/pulls/{number}")
-  if current["head"]["sha"] != pr["head"]["sha"]:
-    raise RuntimeError("PR head changed while reading review data; rerun required")
+
+  def revision(item):
+    base = item.get("base", {})
+    return item["head"]["sha"], base.get("ref"), base.get("sha"), item["state"]
+
+  if revision(current) != revision(pr):
+    raise RuntimeError("PR changed while reading review data; rerun required")
   return {
     "repository": repository,
     "head": pr["head"]["sha"],
+    "base": {key: pr.get("base", {}).get(key) for key in ("ref", "sha")},
     "author": pr["user"]["login"].lower(),
     "state": current["state"],
     "reviews": reviews,
@@ -136,38 +164,93 @@ def parse_disposition(body):
   return fields
 
 
+def timestamp(value):
+  return (
+    datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if value
+    else datetime.min.replace(tzinfo=UTC)
+  )
+
+
+def infiscale_start(body):
+  lines = body.strip().splitlines()
+  return bool(lines) and lines[0].removeprefix("👀").strip() == "收到，开始 review"  # noqa: RUF001
+
+
+def codex_progress(comment):
+  """Use the Code Review row's own time; Security Review edits are unrelated."""
+  body = comment["body"].replace("\r\n", "\n").strip()
+  if not body.startswith(CODEX_SUMMARY + "\n"):
+    return None
+  row = re.search(r"(?m)^\| 📝 \*\*Code Review\*\* \| ([^\n|]+)\|", body)
+  if not row:
+    return None
+  completed = bool(
+    re.fullmatch(
+      r"✅ \*\*Completed\*\*(?: <relative-time [^\n|]*</relative-time>)?",
+      row[1].strip(),
+    )
+  )
+  clock = re.search(r'<relative-time datetime="([^"]+)"', row[1])
+  # A legacy Completed row without a clock cannot complete a newer round.
+  fallback = comment.get("createdAt") if completed else comment.get("updatedAt")
+  return timestamp(clock[1] if clock else fallback), completed
+
+
 def completion_comment(comment):
   bot = actor_login(comment.get("author"))
   body = comment["body"].replace("\r\n", "\n").strip()
   if bot == "infiscale-bot":
-    return body == "未发现本次 PR 引入的新问题。LGTM！"  # noqa: RUF001
-  return (
-    bot == "chatgpt-codex-connector[bot]"
-    and body.startswith("<!-- codex-pull-request-review-summary -->\n")
-    and bool(
-      re.search(
-        r"(?m)^\| 📝 \*\*Code Review\*\* \| ✅ \*\*Completed\*\*"
-        r"(?: <relative-time [^\n|]*</relative-time>)? \|",
-        body,
-      )
-    )
+    return body == INFISCALE_COMPLETE
+  progress = codex_progress(comment) if bot == CODEX else None
+  return progress is not None and progress[1]
+
+
+def review_complete(data, bot):
+  """Rounds for a bot do not overlap; a withdrawn round may use older evidence."""
+  reviews = [r for r in data["reviews"] if actor_login(r.get("author")) == bot]
+  comments = [c for c in data["comments"] if actor_login(c.get("author")) == bot]
+  starts = [timestamp(r.get("createdAt")) for r in reviews if r["state"] == "PENDING"]
+  completed = [
+    timestamp(r.get("submittedAt")) for r in reviews if r["state"] in PUBLISHED_REVIEWS
+  ]
+  progress = []
+  for comment in comments:
+    if bot == "infiscale-bot" and infiscale_start(comment["body"]):
+      starts.append(timestamp(comment.get("createdAt")))
+    if bot == CODEX:
+      status = codex_progress(comment)
+      if status:
+        progress.append(status)
+        if status[1]:
+          completed.append(status[0])
+    elif completion_comment(comment):
+      completed.append(timestamp(comment.get("createdAt")))
+  latest_status = max(
+    progress, key=lambda status: (status[0], not status[1]), default=None
   )
+  if latest_status and not latest_status[1]:
+    starts.append(latest_status[0])
+  start = max(starts, default=timestamp(None))
+  current = [
+    r
+    for r in reviews
+    if r["state"] in PUBLISHED_REVIEWS | {"DISMISSED"}
+    and timestamp(r.get("submittedAt")) >= start
+  ]
+  if current and all(r["state"] == "DISMISSED" for r in current):
+    return bool(completed)
+  if latest_status and not latest_status[1]:
+    return False
+  return any(when >= start for when in completed)
 
 
 def evaluate(data, bots, authorized, tracking_valid):
   """Check PR-wide completion, then apply the same reply policy to AI/human threads."""
-  completed = {
-    actor_login(review.get("author"))
-    for review in data["reviews"]
-    if review["state"] in {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
-  } | {
-    actor_login(comment.get("author"))
-    for comment in data["comments"]
-    if completion_comment(comment)
-  }
   errors = [
-    f"{bot}: missing published review or successful completion comment"
-    for bot in sorted(bots - completed)
+    f"{bot}: waiting for this review round to complete (no valid completion evidence)"
+    for bot in sorted(bots)
+    if not review_complete(data, bot)
   ]
   findings = []
 
@@ -215,7 +298,7 @@ def evaluate(data, bots, authorized, tracking_valid):
           reason = "Fix must be a current PR commit SHA or its repository commit URL"
       elif not reason and status == "Deferred":
         if not tracking_valid(fields.get("tracking", "")):
-          reason = "Tracking must reference an existing, readable, open GitHub issue"
+          reason = "Tracking must reference a readable, open issue in this repository"
     findings.append({
       "id": thread["id"],
       "url": root["url"],
@@ -249,6 +332,47 @@ def summary(number, head, result):
   return "\n".join(lines)
 
 
+def current_check(api, repository, number, head, check):
+  """Only one fixed-name gate remains; late writes cannot rename it back."""
+  path = f"/repos/{repository}/commits/{head}/check-runs"
+  runs = api.pages(
+    f"{path}?check_name={quote(CHECK_NAME, safe='')}&filter=all", "check_runs"
+  )
+  prefix = f"ai-review-disposition:{number}:"
+  runs = [
+    run
+    for run in runs
+    if run["app"]["id"] == check["app"]["id"]
+    and (not run.get("external_id") or run["external_id"].startswith(prefix))
+  ]
+  runs = {run["id"]: run for run in [*runs, check]}.values()
+
+  def order(run):
+    key = re.fullmatch(
+      re.escape(prefix) + r"([0-9]+):([0-9]+)", run.get("external_id") or ""
+    )
+    return (int(key[1]), int(key[2]), run["id"]) if key and int(key[1]) else None
+
+  managed = [run for run in runs if order(run)]
+  newest = max(managed, key=order) if managed else check
+  # An explicit local CLI check is ordered by registration, not an Actions sequence.
+  newest = max(
+    [newest, *(run for run in runs if not order(run))], key=lambda run: run["id"]
+  )
+  for run in runs:
+    if run["id"] != newest["id"]:
+      api.request(
+        "PATCH",
+        f"/repos/{repository}/check-runs/{run['id']}",
+        {
+          "name": f"{CHECK_NAME} (superseded #{run['id']})",
+          "status": "completed",
+          "conclusion": "cancelled",
+        },
+      )
+  return newest["id"] == check["id"]
+
+
 def check_pr(api, repository, number, bots):
   pr = api.request("GET", f"/repos/{repository}/pulls/{number}")
   if pr["state"] != "open":
@@ -257,7 +381,14 @@ def check_pr(api, repository, number, bots):
   check = api.request(
     "POST",
     f"/repos/{repository}/check-runs",
-    {"name": CHECK_NAME, "head_sha": head, "status": "in_progress"},
+    {
+      "name": CHECK_NAME,
+      "head_sha": head,
+      "status": "in_progress",
+      "external_id": f"ai-review-disposition:{number}:"
+      f"{os.environ.get('GITHUB_RUN_NUMBER', '0')}:"
+      f"{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}",
+    },
   )
 
   @cache
@@ -277,20 +408,27 @@ def check_pr(api, repository, number, bots):
   @cache
   def tracking_valid(value):
     match = re.fullmatch(
-      r"https://github\.com/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*)",
+      r"https://github\.com/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)",
       value,
     )
-    if not match:
+    if not match or match[1].lower() != repository.lower():
       return False
     try:
-      item = api.request("GET", f"/repos/{match[1]}")
-      return item["state"] == "open" and "pull_request" not in item
+      item = api.request("GET", f"/repos/{repository}/issues/{match[2]}")
+      return (
+        item["state"] == "open"
+        and "pull_request" not in item
+        and item["repository_url"].lower()
+        == f"https://api.github.com/repos/{repository}".lower()
+      )
     except HTTPError as error:
       if error.code != 404:
         raise
       return False
 
   try:
+    if not current_check(api, repository, number, head, check):
+      return True
     data = snapshot(api, repository, number)
     if data["head"] != head or data["state"] != "open":
       raise RuntimeError("PR changed before evaluation; rerun required")
@@ -301,6 +439,10 @@ def check_pr(api, repository, number, bots):
         result["errors"].append(
           "PR review data changed during evaluation; rerun required"
         )
+      else:
+        authorized.cache_clear()
+        tracking_valid.cache_clear()
+        result = evaluate(data, bots, authorized, tracking_valid)
     ok = passed(result)
     report = summary(number, head, result)
   except Exception as error:
@@ -309,6 +451,8 @@ def check_pr(api, repository, number, bots):
     report = (
       f"PR #{number}: evaluation failed ({type(error).__name__}); rerun required."
     )
+  if not current_check(api, repository, number, head, check):
+    return True
   api.request(
     "PATCH",
     f"/repos/{repository}/check-runs/{check['id']}",
@@ -329,7 +473,11 @@ def check_pr(api, repository, number, bots):
 def main():
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
-  parser.add_argument("--pr-number", type=int, required=True, help="PR to check")
+  target = parser.add_mutually_exclusive_group(required=True)
+  target.add_argument("--pr-number", type=int, help="PR to check")
+  target.add_argument(
+    "--all-open-prs", action="store_true", help="Explicitly recheck every open PR"
+  )
   parser.add_argument("--bots", default=os.environ.get("AI_REVIEW_BOTS", ""))
   args = parser.parse_args()
   bots = {bot.strip().lower() for bot in args.bots.split(",") if bot.strip()}
@@ -339,13 +487,28 @@ def main():
     or any(not re.fullmatch(r"[a-z0-9-]+(?:\[bot\])?", bot) for bot in bots)
     or not args.repository
     or not re.fullmatch(r"[\w.-]+/[\w.-]+", args.repository)
-    or args.pr_number <= 0
+    or (args.pr_number is not None and args.pr_number <= 0)
     or not token
   ):
     parser.error(
-      "Valid repository, nonempty bot logins, PR number > 0 and token required"
+      "Valid repository, bot logins, token and a positive PR or explicit sweep required"
     )
   api = GitHub(token)
+  if args.all_open_prs:
+    numbers = sorted({
+      pr["number"] for pr in api.pages(f"/repos/{args.repository}/pulls?state=open")
+    })
+    ok = True
+    for number in numbers:
+      try:
+        ok = check_pr(api, args.repository, number, bots) and ok
+      except Exception as error:
+        print(
+          f"PR #{number}: check failed ({type(error).__name__}); rerun required.",
+          file=sys.stderr,
+        )
+        ok = False
+    return 0 if ok else 1
   ok = check_pr(api, args.repository, args.pr_number, bots)
   return 0 if ok else 1
 

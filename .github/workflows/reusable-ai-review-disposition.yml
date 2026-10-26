@@ -9,10 +9,16 @@ on:
         type: string
       pr-number:
         description: 'Positive PR number to check in the caller repository'
-        required: true
+        required: false
         type: number
+        default: 0
+      all-open-prs:
+        description: 'Explicitly recheck every open PR after an issue changes'
+        required: false
+        type: boolean
+        default: false
       shared-ref:
-        description: 'Trusted revision of this repository; pin alongside workflow uses'
+        description: 'Revision of the shared CI scripts; defaults to main'
         required: false
         type: string
         default: main
@@ -28,10 +34,10 @@ jobs:
     name: Evaluate AI Review Dispositions
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Serialize updates for this PR only; every run reads its live API state.
+    # Keep the newest evaluation for this PR; other PRs run independently.
     concurrency:
-      group: ai-review-disposition-${{ github.repository }}-${{ inputs.pr-number }}
-      cancel-in-progress: false
+      group: ai-review-disposition-${{ github.repository }}-${{ inputs.all-open-prs && 'all-open-prs' || inputs.pr-number }}
+      cancel-in-progress: true
     steps:
     - name: Checkout trusted shared scripts
       uses: actions/checkout@v4
@@ -43,7 +49,7 @@ jobs:
         sparse-checkout: scripts
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v7
       with:
         python-version: '3.11'
 
@@ -52,6 +58,10 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
         PR_NUMBER: ${{ inputs.pr-number }}
+        ALL_OPEN_PRS: ${{ inputs.all-open-prs }}
       run: |
-        python .ci-shared/scripts/check_ai_review_disposition.py \
-          --pr-number "$PR_NUMBER"
+        if [[ "$ALL_OPEN_PRS" == "true" ]]; then
+          python .ci-shared/scripts/check_ai_review_disposition.py --all-open-prs
+        else
+          python .ci-shared/scripts/check_ai_review_disposition.py --pr-number "$PR_NUMBER"
+        fi

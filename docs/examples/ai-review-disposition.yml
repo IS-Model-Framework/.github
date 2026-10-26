@@ -4,12 +4,14 @@ name: AI Review Disposition
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, edited]
   workflow_run:
     workflows: [AI Review Events]
     types: [completed]
   issue_comment:
     types: [created, edited, deleted]
+  issues:
+    types: [closed, reopened, deleted, transferred]
   workflow_dispatch:
     inputs:
       pr-number:
@@ -25,7 +27,11 @@ permissions:
 
 jobs:
   disposition:
-    if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request }}
+    if: >-
+      ${{ github.event_name != 'issues'
+          && (github.event_name != 'issue_comment' || github.event.issue.pull_request)
+          && (github.event_name != 'pull_request_target'
+              || github.event.action != 'edited' || github.event.changes.base) }}
     uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
     with:
       # Collector run-name is the PR number, even when workflow_run.pull_requests is empty.
@@ -35,5 +41,13 @@ jobs:
             || inputs.pr-number
             || fromJSON(github.event.workflow_run.display_title || '0') }}
       # Set this repository/organization variable to exact bot logins.
+      bot-logins: ${{ vars.AI_REVIEW_BOTS }}
+      shared-ref: main
+
+  issue-recheck:
+    if: ${{ github.event_name == 'issues' }}
+    uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
+    with:
+      all-open-prs: true
       bot-logins: ${{ vars.AI_REVIEW_BOTS }}
       shared-ref: main
