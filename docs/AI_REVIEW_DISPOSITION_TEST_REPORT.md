@@ -17,6 +17,28 @@ python -m scripts.tests.simulate_ai_review_disposition
 
 测试模板及规则见 [隔离验收说明](examples/ai-review-sandbox/README.md)。下面保留对旧提交 `be25a22a1c39b9c64fe8931e858e29829be1ada5` 的历史记录；其中“本轮未修复”等措辞描述当时状态，本次新结果另行追加。
 
+## 本次修复的实测结果
+
+共享候选：`71b6c20bfd6d1d7807eedd7107e922efd239db4a`，分支 `feat/Ai-dispose`。本次只迁移源码与可复制的规则模板，未给公共 CI 仓库自动启用测试门禁。
+
+| 检查 | 结果与证据 |
+| --- | --- |
+| 单元测试与模拟 | Python 3.11：96 项测试通过；Infiscale / Codex / 第二人工账号的 19 个合成场景符合预期；[GitHub Actions](https://github.com/IS-Model-Framework/.github/actions/runs/40305981879) |
+| 自动关闭 Issue 的接入 | [关闭工作流](https://github.com/liaoxiang0304/VR_DexCopilot/actions/runs/40306714886) 使用 GITHUB_TOKEN 成功关闭测试 Issue，并 dispatch 原 caller；[caller](https://github.com/liaoxiang0304/VR_DexCopilot/actions/runs/40306733764) 自动将 Deferred 从成功改为失败 |
+| 关闭 Issue 的参数防护 | [负例运行](https://github.com/liaoxiang0304/VR_DexCopilot/actions/runs/40308211445) 按预期拒绝 PR 编号，测试 PR #3 保持开放，未误关闭 PR |
+| 全仓复查不会提前退出 | 同一 caller 运行 51 中 PR #3 失败，PR #6 仍被检查并通过；复用原 caller 的运行编号，旧成功不能夺回结果 |
+| 手动编号与布尔输入 | [运行](https://github.com/liaoxiang0304/VR_DexCopilot/actions/runs/40306831237) 成功接收数字转换后的 PR 编号；显式 `all-open-prs=false` 只检查该 PR，其他 PR 的 Check ID 未变化 |
+| 已删除 Issue HTTP 410 | 对同一个已删除 Issue #8，Check 给出带 Deferred 链接的 Tracking 错误，并说明已删除 Issue 无法 Deferred；不再显示通用 evaluation failed |
+| 迁移后的最终复核夹具 | [实验](https://github.com/liaoxiang0304/VR_DexCopilot/actions/runs/40307014684) 检测 Issue 在检查期间关闭；实验结束自动 dispatch [原 caller](https://github.com/liaoxiang0304/VR_DexCopilot/actions/runs/40307047812) 刷新正式门禁 |
+| 迁移后的 Bot 夹具 | [实验](https://github.com/liaoxiang0304/VR_DexCopilot/actions/runs/40307186703) 仅编辑所选 PR 中自己发布的意见；已有授权人工回复继续有效 |
+| 迁移后的 A/B 夹具 | [B-success 实验](https://github.com/liaoxiang0304/VR_DexCopilot/actions/runs/40307269178) 使用新候选脚本，通过迟到写入断言 |
+
+Ruff 检查和格式检查、actionlint、三个夹具的 Python 语法检查均通过。结束后已恢复真实 `AI_REVIEW_BOTS`，并通过原 caller 全仓复查撤掉测试身份的成功结果；当前等待真实 AI 完成而失败是预期状态。
+
+自动化须采用新的关闭示例，或在自己的 Issue 修改步骤后追加 dispatch；GitHub 不会替未接入的任意工作流补发被 GITHUB_TOKEN 抑制的事件。调用入口使用自带 Token 的 `actions: write`，无需额外密钥。
+
+共享 head 多 PR 的限制仍然存在；两个不同分支指向同一 commit 时能在真实 GitHub 创建多个 PR，本次未把该限制伪称为已修复。真实 Bot App 接入和第二个人工账号的真实授权仍待现场验收；其判定逻辑已有离线模拟。fork PR、Issue 转移按当前使用范围排除。
+
 ## 原候选版本的历史验收记录
 
 日期：2026-10-26。仓库：[liaoxiang0304/VR_DexCopilot](https://github.com/liaoxiang0304/VR_DexCopilot)。
