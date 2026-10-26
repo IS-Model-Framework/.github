@@ -298,7 +298,10 @@ def evaluate(data, bots, authorized, tracking_valid):
           reason = "Fix must be a current PR commit SHA or its repository commit URL"
       elif not reason and status == "Deferred":
         if not tracking_valid(fields.get("tracking", "")):
-          reason = "Tracking must reference a readable, open issue in this repository"
+          reason = (
+            "Tracking must reference an existing, readable, open issue in this "
+            "repository; deleted issues cannot be deferred"
+          )
     findings.append({
       "id": thread["id"],
       "url": root["url"],
@@ -422,7 +425,7 @@ def check_pr(api, repository, number, bots):
         == f"https://api.github.com/repos/{repository}".lower()
       )
     except HTTPError as error:
-      if error.code != 404:
+      if error.code not in {404, 410}:
         raise
       return False
 

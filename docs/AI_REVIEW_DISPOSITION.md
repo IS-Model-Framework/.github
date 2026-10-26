@@ -57,15 +57,21 @@ force-push 移除修复提交后，Accepted 失效。Issue 关闭后，Deferred 
 4. 首次运行后，将脚本发布的 **`AI Review / Disposition Check`** 加入组织/仓库 ruleset 的 Required Status Checks，来源选 GitHub Actions。不要选择 Actions job 的成功状态，事件的 `GITHUB_SHA` 不一定是 PR head。
 5. 在目标分支的 ruleset / 分支保护中启用 [**Require conversation resolution before merging**](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets#require-a-pull-request-before-merging)，并保留人工 approval 要求。此项必须与 Required Status Check 同时配置；脚本不会修改仓库规则，也不会因未 resolved 而失败。
 
-PR opened/reopened/synchronize、目标分支变化和 PR 顶层评论变化触发单 PR 检查；不监听 ready_for_review。普通聊天不会开启新审查轮次。Review submitted/dismissed、行内评论 created/edited/deleted 先运行无权限 collector，再通过默认分支的 `workflow_run` 触发检查器，因此 fork PR 也可复查。collector 的 `run-name` 必须保持为 PR 编号；该值仅用于路由，判定始终重新读取实时 API，不接受 collector 的代码、artifact 或审查结论。
+PR opened/reopened/synchronize、目标分支变化和 PR 顶层评论变化触发单 PR 检查；不监听 ready_for_review。普通聊天不会开启新审查轮次。Review submitted/dismissed、行内评论 created/edited/deleted 先运行无权限 collector，再通过默认分支的 `workflow_run` 触发检查器。collector 的 `run-name` 必须保持为 PR 编号；该值仅用于路由，判定始终重新读取实时 API，不接受 collector 的代码、artifact 或审查结论。本次验收范围为同仓库 PR / Issue，不要求 fork PR 或 Issue 转移场景。
 
 本仓库 Issue closed/reopened/deleted/transferred 时，caller 使用显式的 `all-open-prs: true` 检查所有开放 PR，不维护 Issue 到 PR 的反向关联，也不把 Issue 编号当作 PR 编号。仍引用无效 Issue 的 Deferred 会阻断；其他 PR 按各自实时状态判断。一个 PR 失败不会跳过后续 PR，新建普通 Issue 不触发。
 
-Resolve/Unresolve 无需触发本 Check，也不需要额外发评论或手动复查；它们由 GitHub 原生 conversation resolution 规则处理。使用 `GITHUB_TOKEN` 发布的 Review、评论或 Issue 事件通常不会触发后续 Actions，应由对应流程显式 dispatch 复查，或用 App token 发布。
+Resolve/Unresolve 无需触发本 Check，也不需要额外发评论或手动复查；它们由 GitHub 原生 conversation resolution 规则处理。
+
+使用 `GITHUB_TOKEN` 修改 Issue 不会自动启动 `issues` 监听。自动关闭 Issue 的接入示例见 [ai-review-close-issue.yml](examples/ai-review-close-issue.yml)：关闭后 dispatch **同一份 caller**，设置 `all-open-prs=true`，由新的 caller 运行复查所有开放 PR。该自动化需要 `issues: write`、`actions: write`，仍使用自带 Token；无需额外钥匙或 Issue 到 PR 的反向关联。其他自动化修改 Issue、发布 Review 或评论后，也须显式触发复查。
+
+手动 Run workflow 可填写正整数 `pr-number`；全仓复查则勾选 `all-open-prs` 并保持 PR 编号为 0。未指定有效目标会失败，不能意外退化为全仓扫描。手动编号经 JSON 数字转换后传给 reusable workflow。删除 Issue 的 HTTP 410 与不存在的 HTTP 404 均给出无效 Tracking 的具体提示，其余 API 错误仍保守阻断。
 
 同一 PR 的新运行取消旧运行；Issue 全仓复查有独立并发组，仍按每个 PR 争取结果发布权。只部署一份 caller，按其运行编号及 attempt 判断新旧。B 接管后只认 B：B 运行中、失败或取消时均不回退到 A 的通过结果。旧 Check 改为带 superseded 后缀的历史名称，只有当前检查使用固定门禁名；最后写结果不设置名称，因此旧请求迟到也不能重新占用 B 的门禁名称。历史记录保留与否不影响 B 的判定。
 
 通过前再次完整读取 PR 状态、目标分支、提交、Review 和评论，并清除缓存重新校验回复者权限及 Issue 有效性。数据变化或 API 错误不放行。补查使用 caller 的 Run workflow；重跑旧编号不能覆盖更新的运行编号。取消、超时或 Check 写入失败可能保留当前 in-progress 状态，需发起新检查。该方案是异步门禁，不提供不可删改的历史审计或 merge queue 合成 SHA 支持。
+
+不同分支可以指向同一 commit 并分别创建真实 PR。实测多 PR 共用 head 时 GitHub 门禁关联异常；当前每条开放 PR 应使用独立 head。对照测试中，给其中一条 PR 追加文件内容不变的 commit 后恢复正常；这不是脚本已支持共享 head 的证明。
 
 CLI（会写入指定 PR 的 Check）：
 
@@ -78,5 +84,7 @@ GH_TOKEN="<token>" python scripts/check_ai_review_disposition.py \
 仅支持 GitHub.com。退出码：0 通过、closed PR 跳过或已被更新检查取代，1 未通过，2 参数错误或未捕获的执行错误。全仓复查使用 `--all-open-prs` 替代 `--pr-number`，逐一处理全部开放 PR 并汇总退出码。验证：`python -m unittest discover -s scripts/tests -v`。
 
 正式启用门禁前，在目标仓库验证：新轮开始阻断、完成后恢复；全部 dismissed 时允许有效旧依据兜底；Issue 关闭使 Deferred 失败、更新模板后恢复；B 失败不能被 A 的迟到成功覆盖，B 成功不被旧记录阻塞。还需验证本 Check 通过但线程未 resolved 时，GitHub 原生规则继续阻止合并；Resolve/Unresolve 只更新原生条件，无需重跑本 Check。
+
+测试夹具、隔离 ruleset 和运行步骤见 [隔离验收模板](examples/ai-review-sandbox/README.md)，历史实测及模拟边界见 [验收记录](AI_REVIEW_DISPOSITION_TEST_REPORT.md)。离线模拟使用 `python -m scripts.tests.simulate_ai_review_disposition`，不会访问 GitHub 或冒充真实账号。
 
 参考：[Actions 事件](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)、[Checks API](https://docs.github.com/en/rest/checks/runs)、[复用 workflow](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)。

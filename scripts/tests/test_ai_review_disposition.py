@@ -893,13 +893,26 @@ class ApiTests(unittest.TestCase):
       "Disposition: Deferred\nReason: Follow up\n"
       "Tracking: https://github.com/org/repo/issues/42"
     )
-    for status in (404, 401, 403, 429, 500):
+    for status in (404, 410, 401, 403, 429, 500):
       with self.subTest(status=status):
         error = HTTPError("https://api.github.com/issue", status, "error", {}, None)
         calls, ok = self.run_check([data], error)
         self.assertFalse(ok)
         self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
         self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+
+  def test_deleted_issue_reports_invalid_tracking_instead_of_api_failure(self):
+    data = fixture(
+      "Disposition: Deferred\nReason: Follow up\n"
+      "Tracking: https://github.com/org/repo/issues/42"
+    )
+    error = HTTPError("https://api.github.com/issue", 410, "Gone", {}, None)
+    calls, ok = self.run_check([data], error)
+    self.assertFalse(ok)
+    report = calls[-1].args[2]["output"]["summary"]
+    self.assertIn("[Deferred]", report)
+    self.assertIn("deleted issues", report)
+    self.assertNotIn("evaluation failed", report)
 
   def test_only_canonical_github_issue_urls_are_queried(self):
     for url in (
