@@ -190,6 +190,60 @@ class StatusPollingTests(unittest.TestCase):
     self.assertEqual(status["id"], 150)
     self.assertEqual(request.call_count, 1)
 
+  def test_background_business_failure_does_not_start_recovery(self):
+    with (
+      patch.dict(os.environ, {"GITHUB_RUN_ID": "1"}),
+      patch.object(checker, "snapshot", return_value=fixtures.fixture()),
+      patch("builtins.print"),
+    ):
+      self.assertTrue(
+        checker.check_pr(
+          self.api,
+          "org/repo",
+          128,
+          {fixtures.BOT},
+          background=True,
+        )
+      )
+    self.assert_states(["pending", "failure"])
+
+  def test_background_unchanged_blocking_result_does_not_start_recovery(self):
+    data = fixtures.fixture()
+    self.assertFalse(self.invoke(data))
+    with (
+      patch.dict(os.environ, {"GITHUB_RUN_ID": "2"}),
+      patch.object(checker, "snapshot", return_value=data),
+      patch("builtins.print"),
+    ):
+      self.assertTrue(
+        checker.check_pr(
+          self.api,
+          "org/repo",
+          128,
+          {fixtures.BOT},
+          only_changed=True,
+          background=True,
+        )
+      )
+    self.assert_states(["pending", "failure"])
+
+  def test_background_execution_failure_still_starts_recovery(self):
+    with (
+      patch.dict(os.environ, {"GITHUB_RUN_ID": "1"}),
+      patch.object(checker, "snapshot", side_effect=RuntimeError("read failed")),
+      patch("builtins.print"),
+    ):
+      self.assertFalse(
+        checker.check_pr(
+          self.api,
+          "org/repo",
+          128,
+          {fixtures.BOT},
+          background=True,
+        )
+      )
+    self.assert_states(["pending", "failure"])
+
 
 class SingleRowWorkflowTests(unittest.TestCase):
   def test_caller_and_recovery_never_use_pr_associated_triggers(self):

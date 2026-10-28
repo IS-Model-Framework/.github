@@ -14,7 +14,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        ref: 74a428e5f87d732b5e8c509e14985e6feebe0692
+        ref: e774814f6bbe9f520c3abb6e39d0b1b89e82dfa9
         persist-credentials: false
     - uses: actions/setup-python@v7
       with:
@@ -26,7 +26,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         TARGET_PR: "25"
         TARGET_SHA: f5633d347bb28356cd8775706d339758e1c40010
-        CANDIDATE: 74a428e5f87d732b5e8c509e14985e6feebe0692
+        CANDIDATE: e774814f6bbe9f520c3abb6e39d0b1b89e82dfa9
       run: |
         python -u - <<'PY'
         import json
@@ -35,7 +35,7 @@ jobs:
         from pathlib import Path
         from scripts.check_ai_review_disposition import (
             GitHub, CHECK_NAME, register_status, publish_status, latest_status,
-            finish_pending, generation,
+            finish_pending, generation, check_pr,
         )
         repo = os.environ['GITHUB_REPOSITORY']
         assert repo == 'IS-Model-Framework/.github'
@@ -68,6 +68,18 @@ jobs:
             assert len(gate) == 1 and gate[0]['state'] == expected
             facts.append({'round': round_number, 'phase': 'finish', 'state': expected, 'visible_contexts': len(gate), 'status_id': gate[0]['id']})
             print(json.dumps(facts[-1]), flush=True)
+        # Exercise the real evaluator against live PR data with a deliberately absent bot.
+        # A valid blocking business result must not be treated as an execution failure.
+        assert check_pr(api, repo, number, {'sandbox-missing-reviewer[bot]'}, background=True)
+        blocked = latest_status(api, repo, head)
+        assert blocked['state'] == 'failure'
+        assert check_pr(api, repo, number, {'sandbox-missing-reviewer[bot]'}, only_changed=True, background=True)
+        assert latest_status(api, repo, head)['id'] == blocked['id']
+        facts.append({'phase': 'live_evaluator', 'state': 'failure', 'worker_execution': 'success', 'unchanged_scan_added_statuses': 0})
+        # Restore the labelled sandbox lifecycle success; this never claims real AI acceptance.
+        pending = register_status(api, repo, number, head)
+        assert latest_status(api, repo, head)['state'] == 'pending'
+        publish_status(api, repo, number, head, 'success', 'SANDBOX API lifecycle passed; not real AI acceptance', pending)
         checks = api.request('GET', f'/repos/{repo}/commits/{head}/check-runs?filter=all&per_page=100')
         assert not checks['check_runs'], checks['check_runs']
         query = 'query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on StatusContext{context state targetUrl} ... on CheckRun{name conclusion}}}}}}}}}}'
@@ -85,7 +97,7 @@ jobs:
             summary.write('# Single-row status API verification\n\nSANDBOX: lifecycle only; no real bot completion claimed.\n\n')
             summary.write(f'Candidate: `{os.environ["CANDIDATE"]}`\n\n')
             summary.write(f'Target: https://github.com/{repo}/pull/{number}/checks\n\n')
-            summary.write('Four rounds, eight state writes, one visible StatusContext, zero native target Checks.\n\n')
+            summary.write('Four lifecycle rounds plus live evaluator blocking and an unchanged scan; one visible StatusContext and zero native target Checks.\n\n')
             summary.write('```json\n' + json.dumps(report, indent=2) + '\n```\n')
         print(json.dumps({'result': 'passed', 'target_pr': number, 'visible_contexts': len(contexts), 'native_checks': checks['total_count']}), flush=True)
         PY
