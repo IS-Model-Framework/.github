@@ -796,15 +796,15 @@ class ApiTests(unittest.TestCase):
         )
         calls, ok = self.run_check([data, copy.deepcopy(data)])
         self.assertTrue(ok)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(calls[-1].args[2]["state"], "success")
 
   def test_check_is_written_to_pr_head_not_event_sha(self):
     data = fixture("Disposition: Invalid\nReason: False positive")
     calls, ok = self.run_check([data, copy.deepcopy(data)])
     self.assertTrue(ok)
-    self.assertEqual(calls[1].args[1].rsplit("/", 1)[-1], HEAD)
-    self.assertEqual(calls[1].args[2]["context"], CHECK_NAME)
+    self.assertEqual(calls[2].args[1].rsplit("/", 1)[-1], HEAD)
+    self.assertEqual(calls[2].args[2]["context"], CHECK_NAME)
     self.assertEqual(calls[-1].args[2]["state"], "success")
 
   def test_new_finding_during_read_prevents_success(self):
@@ -854,7 +854,7 @@ class ApiTests(unittest.TestCase):
         )
         calls, ok = self.run_check([data, copy.deepcopy(data)], {"state": "open"})
         self.assertTrue(ok)
-        self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
+        self.assertEqual(calls[3].args, ("GET", "/repos/org/repo/issues/42"))
         self.assertEqual(calls[-1].args[2]["state"], "success")
 
   def test_missing_unreadable_or_failed_issue_lookup_blocks_deferred(self):
@@ -867,7 +867,7 @@ class ApiTests(unittest.TestCase):
         error = HTTPError("https://api.github.com/issue", status, "error", {}, None)
         calls, ok = self.run_check([data], error)
         self.assertFalse(ok)
-        self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
+        self.assertEqual(calls[3].args, ("GET", "/repos/org/repo/issues/42"))
         self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_deleted_issue_reports_invalid_tracking_instead_of_api_failure(self):
@@ -899,8 +899,8 @@ class ApiTests(unittest.TestCase):
         data = fixture(f"Disposition: Deferred\nReason: Follow up\nTracking: {url}")
         calls, ok = self.run_check([data])
         self.assertFalse(ok)
-        # Only PR metadata, Check creation, and Check completion; no issue request.
-        self.assertEqual(len(calls), 3)
+        # PR metadata, status lookup, pending and final publication; no Issue lookup.
+        self.assertEqual(len(calls), 4)
         self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_multiple_findings_share_one_issue_lookup(self):
@@ -992,7 +992,7 @@ class ApiTests(unittest.TestCase):
         calls, ok = self.run_check([data], error)
         self.assertFalse(ok)
         self.assertEqual(
-          calls[2].args, ("GET", "/repos/org/repo/collaborators/user%2Fname/permission")
+          calls[3].args, ("GET", "/repos/org/repo/collaborators/user%2Fname/permission")
         )
         self.assertEqual(calls[-1].args[2]["state"], "failure")
 
@@ -1004,6 +1004,8 @@ class ApiTests(unittest.TestCase):
     def respond(method, path, body=None):
       if (method, path) == ("GET", "/repos/org/repo/pulls/128"):
         return pr
+      if method == "GET" and "/statuses?" in path:
+        return []
       if method == "POST":
         return {"id": 99, "creator": {"login": "github-actions[bot]"}, **body}
       if method == "PATCH":
@@ -1076,6 +1078,12 @@ class StatusStore(GitHub):
       }
       self.statuses.append(status)
       return copy.deepcopy(status)
+    if method == "GET" and "/commits/" in path and "/statuses?" in path:
+      head = path.split("/commits/", 1)[1].split("/", 1)[0]
+      statuses = [item for item in reversed(self.statuses) if item["head_sha"] == head]
+      query = parse_qs(urlsplit(path).query)
+      start = (int(query["page"][0]) - 1) * 100
+      return copy.deepcopy(statuses[start : start + 100])
     if method == "GET" and "/commits/" in path and "/status?" in path:
       head = path.split("/commits/", 1)[1].split("/", 1)[0]
       latest = {}
@@ -1084,7 +1092,10 @@ class StatusStore(GitHub):
           latest.setdefault(status["context"].lower(), status)
       query = parse_qs(urlsplit(path).query)
       start = (int(query["page"][0]) - 1) * 100
-      return {"statuses": copy.deepcopy(list(latest.values())[start : start + 100])}
+      statuses = copy.deepcopy(list(latest.values())[start : start + 100])
+      for status in statuses:
+        status.pop("creator", None)
+      return {"statuses": statuses}
     raise AssertionError(f"Unexpected API call: {method} {path}")
 
   def gate(self, head=HEAD):
