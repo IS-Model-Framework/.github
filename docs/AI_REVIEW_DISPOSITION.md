@@ -93,6 +93,8 @@ gh workflow run ai-review-disposition.yml --repo "$GITHUB_REPOSITORY" \
 
 所有单 PR、全仓和恢复运行共用仓库级 concurrency group，`cancel-in-progress=false`，避免两个入口同时写相同 context。等待中的重复触发可能被最新任务替代，后续定时扫描会重新覆盖全部开放 PR。单次运行串行处理目标，一个 PR 失败后仍继续其余 PR；worker 最长 30 分钟，目标过多时需关注超时和 API 配额。
 
+后台 worker 使用 `--background`：正常发布的业务 failure（例如等待机器人或缺少回复）由唯一 PR 状态表达，后台运行可成功，避免每次定时扫描又启动一次无意义恢复。读取 / 校验异常、结果发布失败或状态额度耗尽仍使 worker 失败并启动恢复；不能把后台 job 的成功当成 PR 门禁通过。直接运行 CLI 时不加该参数，业务 failure 仍返回非零退出码。
+
 显式检查在获取当前 head 后先发布 pending。通过前再次读取完整 PR 快照，清缓存复核人工权限和 Issue 状态，确认结果仍有效。只读 REST / GraphQL 请求的瞬时网络错误、429、500/502/503/504 或带 Retry-After 的 403 最多重试三次；不早于 Retry-After 重试，等待超过 60 秒则中止。状态写入不盲重试。
 
 状态 Details URL 关联实际 run ID / attempt，并携带受控的 PR、写入计数和证据指纹。旧 run 的重跑不能覆盖已登记的新 run；最终发布和 cleanup 先检查当前状态 ID 是否仍属于自己。普通退出通过本机登记日志将自己遗留的 pending 标记为中断 failure；最终写入失败时保留 pending 阻断。取消、硬超时或初始化失败由独立的默认分支恢复入口定位原目标，经过同一个 worker 队列实时重查；恢复不直接写旁路结果。定时扫描也会重试遗留 pending / failure。

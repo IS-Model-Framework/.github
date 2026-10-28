@@ -81,7 +81,7 @@ jobs:
         RECOVER_RUN_ID: ${{ inputs.recover-run-id }}
         ONLY_CHANGED: ${{ inputs.only-changed }}
       run: |
-        args=()
+        args=(--background)
         if [[ "$ONLY_CHANGED" == "true" ]]; then
           args+=(--only-changed)
         fi

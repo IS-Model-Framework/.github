@@ -603,7 +603,9 @@ def prepare_targets(api, repository, number=None, all_open=False, recover=None):
   return [targets[number] for number in sorted(targets)]
 
 
-def check_pr(api, repository, number, bots, head=None, only_changed=False):
+def check_pr(
+  api, repository, number, bots, head=None, only_changed=False, background=False
+):
   try:
     pr = api.request("GET", f"/repos/{repository}/pulls/{number}")
     if pr["state"] != "open":
@@ -700,7 +702,7 @@ def check_pr(api, repository, number, bots, head=None, only_changed=False):
             and previous["state"] == ("success" if passed(result) else "failure")
             and current_status(api, repository, number, head, previous)
           ):
-            return passed(result)
+            return passed(result) or background
     except Exception as error:
       preparation_error = error
   status = register_status(api, repository, number, head)
@@ -776,7 +778,9 @@ def check_pr(api, repository, number, bots, head=None, only_changed=False):
       open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream,
     ):
       stream.write(report + "\n\n")
-  return ok
+  # A valid blocking business result belongs to the PR status. Only execution
+  # failures should activate the background workflow's recovery entry point.
+  return ok or (background and status_identity(final, repository)[4] != "none")
 
 
 def main():
@@ -807,6 +811,11 @@ def main():
     "--only-changed",
     action="store_true",
     help="Poll live evidence without rewriting unchanged terminal results",
+  )
+  parser.add_argument(
+    "--background",
+    action="store_true",
+    help="Recover execution errors, not valid blocking business results",
   )
   args = parser.parse_args()
   bots = {bot.strip().lower() for bot in args.bots.split(",") if bot.strip()}
@@ -840,6 +849,8 @@ def main():
         stream.write(f"matrix={matrix}\nhas-targets={'true' if targets else 'false'}\n")
     return 0
   options = {"only_changed": True} if args.only_changed else {}
+  if args.background:
+    options["background"] = True
   if args.recover_run or args.all_open_prs:
     targets = prepare_targets(
       api, args.repository, args.pr_number, args.all_open_prs, args.recover_run
