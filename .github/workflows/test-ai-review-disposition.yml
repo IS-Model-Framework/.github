@@ -1,26 +1,10 @@
-name: Test AI Review Disposition
-
+name: Sandbox status target
 on:
-  pull_request:
-    paths:
-    - 'scripts/**'
-    - 'docs/examples/ai-review*.yml'
-    - '.github/workflows/*ai-review*.yml'
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
-  test:
+  placeholder:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
-    - uses: actions/checkout@v4
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@v7
-      with:
-        python-version: '3.11'
-    - name: Run unit tests
-      run: python -m unittest discover -s scripts/tests -v
+    - run: echo "Status API target only; no PR job is generated"
