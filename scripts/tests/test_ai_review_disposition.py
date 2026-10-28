@@ -11,8 +11,8 @@ from scripts.check_ai_review_disposition import (
   CHECK_NAME,
   GitHub,
   check_pr,
-  current_check,
-  register_check,
+  current_status,
+  register_status,
   prepare_targets,
   evaluate,
   main,
@@ -697,9 +697,7 @@ class ApiTests(unittest.TestCase):
         api.graphql("query", {})
 
   def test_resolution_changes_during_check_do_not_block(self):
-    api = GitHub("test-token")
     data = fixture("Disposition: Invalid\nReason: False positive")
-    pr = pr_metadata(user={"login": data["author"]})
 
     for resolutions in ((False, True), (True, False)):
       with self.subTest(resolutions=resolutions):
@@ -725,19 +723,11 @@ class ApiTests(unittest.TestCase):
               return {"node": {field: page(nodes)}}
           self.fail("Unexpected GraphQL query")
 
-        with (
-          patch("scripts.check_ai_review_disposition.current_check", return_value=True),
-          patch.object(
-            api, "request", side_effect=[pr, {"id": 99}, pr, pr, pr, pr, {}]
-          ) as request,
-          patch.object(api, "graphql", side_effect=graphql),
-          patch.object(api, "pages", return_value=[]),
-          patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}),
-          patch("builtins.print"),
-        ):
+        api = StatusStore()
+        with patch.object(api, "graphql", side_effect=graphql), patch("builtins.print"):
           self.assertTrue(check_pr(api, "org/repo", 128, {BOT}))
         self.assertEqual(list(states), [])
-        self.assertEqual(request.call_args.args[2]["conclusion"], "success")
+        self.assertEqual(api.gate()[0]["state"], "success")
 
   def test_snapshot_rejects_head_change_during_read(self):
     api = GitHub("test-token")
@@ -807,15 +797,15 @@ class ApiTests(unittest.TestCase):
         calls, ok = self.run_check([data, copy.deepcopy(data)])
         self.assertTrue(ok)
         self.assertEqual(len(calls), 3)
-        self.assertEqual(calls[-1].args[2]["conclusion"], "success")
+        self.assertEqual(calls[-1].args[2]["state"], "success")
 
   def test_check_is_written_to_pr_head_not_event_sha(self):
     data = fixture("Disposition: Invalid\nReason: False positive")
     calls, ok = self.run_check([data, copy.deepcopy(data)])
     self.assertTrue(ok)
-    self.assertEqual(calls[1].args[2]["head_sha"], HEAD)
-    self.assertEqual(calls[1].args[2]["name"], CHECK_NAME)
-    self.assertEqual(calls[-1].args[2]["conclusion"], "success")
+    self.assertEqual(calls[1].args[1].rsplit("/", 1)[-1], HEAD)
+    self.assertEqual(calls[1].args[2]["context"], CHECK_NAME)
+    self.assertEqual(calls[-1].args[2]["state"], "success")
 
   def test_new_finding_during_read_prevents_success(self):
     for reviewer in (BOT, "human-reviewer"):
@@ -825,7 +815,7 @@ class ApiTests(unittest.TestCase):
         changed["threads"].append(fixture(reviewer=reviewer)["threads"][0])
         calls, ok = self.run_check([data, changed])
         self.assertFalse(ok)
-        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+        self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_completion_comment_changed_during_read_prevents_success(self):
     data = fixture("Disposition: Invalid\nReason: Test")
@@ -834,12 +824,12 @@ class ApiTests(unittest.TestCase):
     changed["comments"][0]["body"] = INFISCALE_START
     calls, ok = self.run_check([data, changed])
     self.assertFalse(ok)
-    self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+    self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_api_failure_finishes_check_as_failure(self):
     calls, ok = self.run_check(RuntimeError("failed"))
     self.assertFalse(ok)
-    self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+    self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_closed_tracking_issue_or_pr_cannot_defer(self):
     for reviewer in (BOT, "human-reviewer"):
@@ -852,7 +842,7 @@ class ApiTests(unittest.TestCase):
         with self.subTest(reviewer=reviewer, item=item):
           calls, ok = self.run_check([data], item)
           self.assertFalse(ok)
-          self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+          self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_deferred_requires_a_successful_open_issue_lookup(self):
     for reviewer in (BOT, "human-reviewer"):
@@ -865,7 +855,7 @@ class ApiTests(unittest.TestCase):
         calls, ok = self.run_check([data, copy.deepcopy(data)], {"state": "open"})
         self.assertTrue(ok)
         self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
-        self.assertEqual(calls[-1].args[2]["conclusion"], "success")
+        self.assertEqual(calls[-1].args[2]["state"], "success")
 
   def test_missing_unreadable_or_failed_issue_lookup_blocks_deferred(self):
     data = fixture(
@@ -878,7 +868,7 @@ class ApiTests(unittest.TestCase):
         calls, ok = self.run_check([data], error)
         self.assertFalse(ok)
         self.assertEqual(calls[2].args, ("GET", "/repos/org/repo/issues/42"))
-        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+        self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_deleted_issue_reports_invalid_tracking_instead_of_api_failure(self):
     data = fixture(
@@ -886,9 +876,9 @@ class ApiTests(unittest.TestCase):
       "Tracking: https://github.com/org/repo/issues/42"
     )
     error = HTTPError("https://api.github.com/issue", 410, "Gone", {}, None)
-    calls, ok = self.run_check([data], error)
+    _, ok = self.run_check([data], error)
     self.assertFalse(ok)
-    report = calls[-1].args[2]["output"]["summary"]
+    report = self.report
     self.assertIn("[Deferred]", report)
     self.assertIn("deleted issues", report)
     self.assertNotIn("evaluation failed", report)
@@ -911,7 +901,7 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(ok)
         # Only PR metadata, Check creation, and Check completion; no issue request.
         self.assertEqual(len(calls), 3)
-        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+        self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_multiple_findings_share_one_issue_lookup(self):
     data = fixture(
@@ -948,7 +938,7 @@ class ApiTests(unittest.TestCase):
         data["threads"][0]["comments"][-1]["author"]["login"] = login
         calls, ok = self.run_check([data, copy.deepcopy(data)], [first, second])
         self.assertFalse(ok)
-        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+        self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def test_cross_repository_links_are_rejected_without_reading_them(self):
     for repo in ("org/other", "other/repo"):
@@ -1004,7 +994,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(
           calls[2].args, ("GET", "/repos/org/repo/collaborators/user%2Fname/permission")
         )
-        self.assertEqual(calls[-1].args[2]["conclusion"], "failure")
+        self.assertEqual(calls[-1].args[2]["state"], "failure")
 
   def run_check(self, snapshots, lookup=None):
     api = GitHub("test-token")
@@ -1015,7 +1005,7 @@ class ApiTests(unittest.TestCase):
       if (method, path) == ("GET", "/repos/org/repo/pulls/128"):
         return pr
       if method == "POST":
-        return {"id": 99}
+        return {"id": 99, "creator": {"login": "github-actions[bot]"}, **body}
       if method == "PATCH":
         return {}
       value = next(lookups) if lookups else lookup
@@ -1030,160 +1020,174 @@ class ApiTests(unittest.TestCase):
     with (
       patch.object(api, "request", side_effect=respond) as request,
       patch.object(api, "pages", return_value=[]),
-      patch("scripts.check_ai_review_disposition.current_check", return_value=True),
+      patch("scripts.check_ai_review_disposition.current_status", return_value=True),
       patch("scripts.check_ai_review_disposition.snapshot", side_effect=snapshots),
       patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}),
-      patch("builtins.print"),
+      patch("sys.stdout", new_callable=io.StringIO) as stdout,
     ):
       ok = check_pr(api, "org/repo", 128, {BOT})
+      self.report = stdout.getvalue()
       return request.call_args_list, ok
 
 
-class CheckStore(GitHub):
-  """Exercise interleaved evaluations without writing to GitHub."""
+class StatusStore(GitHub):
+  """Model GitHub's append-only history and latest-per-context combined endpoint."""
 
   def __init__(self):
     super().__init__("test-token")
-    self.checks = {}
+    self.statuses = []
 
-  def add(self, run, attempt=1, app=1, number=128):
-    check = {
-      "id": len(self.checks) + 1,
-      "name": CHECK_NAME,
-      "head_sha": HEAD,
-      "status": "in_progress",
-      "app": {"id": app, "slug": "github-actions" if app == 1 else "other"},
-      "external_id": f"ai-review-disposition:{number}:{run}:{attempt}",
+  def add(
+    self,
+    run,
+    attempt=1,
+    number=128,
+    head=HEAD,
+    state="pending",
+    context=CHECK_NAME,
+    digest="none",
+    writes=None,
+    actor="github-actions[bot]",
+  ):
+    writes = writes if writes is not None else len(self.statuses) + 1
+    status = {
+      "id": len(self.statuses) + 1,
+      "context": context,
+      "state": state,
+      "head_sha": head,
+      "creator": {"login": actor},
+      "target_url": f"https://github.com/org/repo/actions/runs/{run}/attempts/{attempt}"
+      f"#ai-disposition:{number}:{writes}:{digest}",
+      "description": "Fixture",
     }
-    self.checks[check["id"]] = check
-    return copy.deepcopy(check)
+    self.statuses.append(status)
+    return copy.deepcopy(status)
 
   def request(self, method, path, body=None):
     if method == "GET" and "/pulls/" in path:
-      return {"state": "open", "head": {"sha": HEAD}}
-    if method == "POST":
-      check = self.add(0)
-      self.checks[check["id"]].update(copy.deepcopy(body))
-      return copy.deepcopy(self.checks[check["id"]])
-    if method == "GET" and "/check-runs/" in path:
-      return copy.deepcopy(self.checks[int(path.rsplit("/", 1)[1])])
-    if method == "GET":
+      return pr_metadata(number=128)
+    if method == "POST" and "/statuses/" in path:
+      assert set(body) == {"context", "state", "target_url", "description"}
+      status = {
+        "id": len(self.statuses) + 1,
+        "creator": {"login": "github-actions[bot]"},
+        "head_sha": path.rsplit("/", 1)[-1],
+        **copy.deepcopy(body),
+      }
+      self.statuses.append(status)
+      return copy.deepcopy(status)
+    if method == "GET" and "/commits/" in path and "/status?" in path:
+      head = path.split("/commits/", 1)[1].split("/", 1)[0]
+      latest = {}
+      for status in reversed(self.statuses):
+        if status["head_sha"] == head:
+          latest.setdefault(status["context"].lower(), status)
       query = parse_qs(urlsplit(path).query)
-      runs = [
-        c
-        for c in self.checks.values()
-        if c["name"] == query["check_name"][0] and c["head_sha"] in path
-      ]
       start = (int(query["page"][0]) - 1) * 100
-      return {"check_runs": copy.deepcopy(runs[start : start + 100])}
-    if method == "PATCH":
-      check = self.checks[int(path.rsplit("/", 1)[1])]
-      check.update(copy.deepcopy(body))
-      # GitHub retains a stored conclusion unless it is explicitly cleared.
-      if check.get("conclusion") is not None:
-        check["status"] = "completed"
-      return copy.deepcopy(check)
+      return {"statuses": copy.deepcopy(list(latest.values())[start : start + 100])}
     raise AssertionError(f"Unexpected API call: {method} {path}")
 
-  def gate(self):
-    return [c for c in self.checks.values() if c["name"] == CHECK_NAME]
+  def gate(self, head=HEAD):
+    return [
+      status
+      for status in self.pages(f"/repos/org/repo/commits/{head}/status", "statuses")
+      if status["context"].lower() == CHECK_NAME.lower()
+    ]
 
 
-class LatestCheckTests(unittest.TestCase):
-  def test_twenty_serial_evaluations_reuse_one_check_and_publish_latest_result(self):
-    api = CheckStore()
+class LatestStatusTests(unittest.TestCase):
+  def setUp(self):
+    self.environment = patch.dict(
+      "os.environ", {"GITHUB_STEP_SUMMARY": "", "AI_REVIEW_CHECKS_FILE": ""}
+    )
+    self.environment.start()
+    self.addCleanup(self.environment.stop)
+
+  def test_twenty_evaluations_keep_one_context_and_enter_real_pending_every_time(self):
+    api = StatusStore()
     ready = fixture("Disposition: Invalid\nReason: Test")
-    with patch("builtins.print"), patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+    with patch("builtins.print"):
       for run in range(1, 21):
         ok = run % 2 == 0
+
+        def read(api_arg, repository, number, ok=ok):
+          self.assertEqual(api.gate()[0]["state"], "pending")
+          return ready if ok else fixture()
+
         with (
           patch.dict(
             "os.environ", {"GITHUB_RUN_ID": str(run), "GITHUB_RUN_ATTEMPT": "1"}
           ),
-          patch(
-            "scripts.check_ai_review_disposition.snapshot",
-            return_value=ready if ok else fixture(),
-          ),
+          patch("scripts.check_ai_review_disposition.snapshot", side_effect=read),
         ):
           self.assertEqual(check_pr(api, "org/repo", 128, {BOT}), ok)
-        self.assertEqual(len(api.checks), 1)
-        self.assertEqual(api.checks[1]["conclusion"], "success" if ok else "failure")
-    self.assertEqual(api.checks[1]["external_id"], "ai-review-disposition:128:20:1")
+        self.assertEqual(len(api.gate()), 1)
+        self.assertEqual(api.gate()[0]["state"], "success" if ok else "failure")
+    self.assertEqual(len(api.statuses), 40)
+    self.assertEqual([item["state"] for item in api.statuses[::2]], ["pending"] * 20)
 
-  def test_reopening_a_success_blocks_without_creating_history(self):
-    api = CheckStore()
-    check = register_check(api, "org/repo", 128, HEAD, (1, 1))
-    api.checks[check["id"]].update(status="completed", conclusion="success")
-    newer = register_check(api, "org/repo", 128, HEAD, (2, 1))
-    self.assertEqual(check["id"], newer["id"])
-    self.assertEqual(newer["status"], "completed")
-    self.assertEqual(newer["conclusion"], "failure")
-    self.assertEqual(newer["output"]["title"], "Checking")
-    self.assertRegex(newer["completed_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-    self.assertFalse(current_check(api, "org/repo", 128, HEAD, check))
-    self.assertTrue(current_check(api, "org/repo", 128, HEAD, newer))
+  def test_success_can_return_to_pending_without_a_new_visible_context(self):
+    api = StatusStore()
+    old = api.add(1, state="success")
+    newer = register_status(api, "org/repo", 128, HEAD, (2, 1))
+    self.assertEqual(newer["state"], "pending")
+    self.assertEqual(len(api.gate()), 1)
+    self.assertFalse(current_status(api, "org/repo", 128, HEAD, old))
+    self.assertTrue(current_status(api, "org/repo", 128, HEAD, newer))
 
   def test_delayed_old_registration_and_rerun_cannot_take_over(self):
-    api = CheckStore()
-    check = register_check(api, "org/repo", 128, HEAD, (20, 1))
-    self.assertIsNone(register_check(api, "org/repo", 128, HEAD, (19, 99)))
-    newer = register_check(api, "org/repo", 128, HEAD, (20, 2))
-    self.assertEqual(newer["id"], check["id"])
-    self.assertFalse(current_check(api, "org/repo", 128, HEAD, check))
-    self.assertIsNone(register_check(api, "org/repo", 128, HEAD, (20, 1)))
-    self.assertEqual(len(api.checks), 1)
+    api = StatusStore()
+    old = register_status(api, "org/repo", 128, HEAD, (20, 1))
+    self.assertIsNone(register_status(api, "org/repo", 128, HEAD, (19, 99)))
+    newer = register_status(api, "org/repo", 128, HEAD, (20, 2))
+    self.assertFalse(current_status(api, "org/repo", 128, HEAD, old))
+    self.assertTrue(current_status(api, "org/repo", 128, HEAD, newer))
+    self.assertIsNone(register_status(api, "org/repo", 128, HEAD, (20, 1)))
+    self.assertEqual(len(api.statuses), 2)
 
-  def test_recovery_workflow_uses_global_run_id_instead_of_local_run_number(self):
-    api = CheckStore()
-    register_check(api, "org/repo", 128, HEAD, (100, 1))
+  def test_recovery_uses_global_run_id_instead_of_local_run_number(self):
+    api = StatusStore()
+    api.add(100)
     with patch.dict(
       "os.environ",
       {"GITHUB_RUN_ID": "101", "GITHUB_RUN_NUMBER": "1", "GITHUB_RUN_ATTEMPT": "1"},
     ):
-      newer = register_check(api, "org/repo", 128, HEAD)
-    self.assertEqual(newer["external_id"], "ai-review-disposition:128:101:1")
-    self.assertEqual(len(api.checks), 1)
+      newer = register_status(api, "org/repo", 128, HEAD)
+    self.assertIn("/runs/101/attempts/1", newer["target_url"])
+    self.assertEqual(len(api.gate()), 1)
 
-  def test_existing_history_other_apps_prs_and_ci_are_untouched(self):
-    api = CheckStore()
+  def test_unrelated_contexts_and_existing_history_are_untouched(self):
+    api = StatusStore()
     for run in range(1, 102):
-      newest = api.add(run)
-    api.add(999, app=2)
-    api.add(999, number=129)
-    ci = api.add(999)
-    api.checks[ci["id"]]["name"] = "Unrelated CI"
-    old = api.add(0)
-    api.checks[old["id"]]["name"] += " (superseded #104)"
-    before = copy.deepcopy(api.checks)
-    check = register_check(api, "org/repo", 128, HEAD, (102, 1))
-    self.assertEqual(check["id"], newest["id"])
-    self.assertEqual(len(api.checks), len(before))
-    for key in before:
-      if key != newest["id"]:
-        self.assertEqual(api.checks[key], before[key])
+      api.add(run)
+    api.add(999, context="Unrelated CI", actor="another-service")
+    before = copy.deepcopy(api.statuses)
+    register_status(api, "org/repo", 128, HEAD, (102, 1))
+    self.assertEqual(api.statuses[:-1], before)
+    self.assertEqual(len(api.gate()), 1)
 
-  def test_new_head_gets_its_own_check(self):
-    api = CheckStore()
-    first = register_check(api, "org/repo", 128, HEAD, (1, 1))
+  def test_new_head_gets_one_independent_context(self):
+    api = StatusStore()
+    register_status(api, "org/repo", 128, HEAD, (1, 1))
     other_head = "c" * 40
-    second = register_check(api, "org/repo", 128, other_head, (2, 1))
-    self.assertNotEqual(first["id"], second["id"])
-    self.assertEqual(len(api.checks), 2)
-    self.assertEqual(
-      register_check(api, "org/repo", 128, other_head, (3, 1))["id"], second["id"]
-    )
+    register_status(api, "org/repo", 128, other_head, (2, 1))
+    register_status(api, "org/repo", 128, other_head, (3, 1))
+    self.assertEqual(len(api.gate()), 1)
+    self.assertEqual(len(api.gate(other_head)), 1)
 
-  def test_legacy_check_without_external_id_is_reused(self):
-    api = CheckStore()
-    old = api.add(0)
-    api.checks[old["id"]]["external_id"] = ""
-    self.assertEqual(
-      register_check(api, "org/repo", 128, HEAD, (1, 1))["id"], old["id"]
-    )
-    self.assertEqual(len(api.checks), 1)
+  def test_unknown_writer_or_shared_pr_head_is_not_silently_adopted(self):
+    for options in ({"actor": "stranger"}, {"number": 129}):
+      api = StatusStore()
+      api.add(1, **options)
+      with self.subTest(options=options), self.assertRaises(ValueError):
+        register_status(api, "org/repo", 128, HEAD, (2, 1))
+      if "number" in options:
+        self.assertEqual(api.gate()[0]["state"], "failure")
+      else:
+        self.assertEqual(len(api.statuses), 1)
 
-  def test_queued_worker_uses_live_head_instead_of_router_snapshot(self):
-    api = CheckStore()
+  def test_queued_worker_uses_live_head_instead_of_routing_snapshot(self):
+    api = StatusStore()
     with (
       patch("scripts.check_ai_review_disposition.snapshot", return_value=fixture()),
       patch("builtins.print"),
@@ -1201,9 +1205,9 @@ class MainTests(unittest.TestCase):
       ),
       patch("scripts.check_ai_review_disposition.GitHub") as client,
       patch(
-        "scripts.check_ai_review_disposition.register_check", return_value={"id": 99}
+        "scripts.check_ai_review_disposition.register_status", return_value={"id": 99}
       ),
-      patch("scripts.check_ai_review_disposition.current_check", return_value=True),
+      patch("scripts.check_ai_review_disposition.current_status", return_value=True),
       patch(
         "scripts.check_ai_review_disposition.check_pr", return_value=passed
       ) as check,
@@ -1211,29 +1215,32 @@ class MainTests(unittest.TestCase):
     ):
       if numbers is not None:
         client.return_value.pages.return_value = [
-          {"number": n, "head": {"sha": HEAD}} for n in numbers
+          {"number": n, "state": "open", "head": {"sha": HEAD}} for n in numbers
         ]
       if results is not None:
         check.side_effect = results
       return main(), client, check
 
   def test_sweep_only_routes_all_targets_without_writing_checks(self):
-    api = CheckStore()
+    api = StatusStore()
     prs = [{"number": n, "state": "open", "head": {"sha": HEAD}} for n in [24, 7, 24]]
     with patch.object(api, "pages", return_value=prs):
       self.assertEqual(
         prepare_targets(api, "org/repo", all_open=True),
         [{"number": n, "head": HEAD} for n in [7, 24]],
       )
-    self.assertEqual(api.checks, {})
+    self.assertEqual(api.statuses, [])
 
   def test_empty_sweep_routes_no_workers(self):
     with patch.object(GitHub, "pages", return_value=[]):
       self.assertEqual(prepare_targets(GitHub("token"), "org/repo", all_open=True), [])
 
-  def test_direct_sweep_is_rejected_to_prevent_bypassing_worker_queue(self):
-    with self.assertRaises(SystemExit):
-      self.run_main("--all-open-prs")
+  def test_direct_sweep_checks_every_target_even_after_a_failure(self):
+    code, _, check = self.run_main(
+      "--all-open-prs", numbers=[1, 2], results=[False, True]
+    )
+    self.assertEqual(code, 1)
+    self.assertEqual(check.call_count, 2)
 
   def test_open_pr_enumeration_reads_all_pages_without_issue_backlinks(self):
     api = GitHub("test-token")
@@ -1270,11 +1277,12 @@ class MainTests(unittest.TestCase):
         self.run_main(*arguments)
       self.assertEqual(error.exception.code, 2)
 
-  def test_empty_or_invalid_bot_configuration_is_an_error(self):
-    for bots in ("", ",", "reviewer+bot"):
-      with self.subTest(bots=bots), self.assertRaises(SystemExit) as error:
-        self.run_main("--pr-number", "313", "--bots", bots)
-      self.assertEqual(error.exception.code, 2)
+  def test_invalid_bot_configuration_is_published_as_failure(self):
+    for bots in (set(), {"reviewer+bot"}):
+      api = StatusStore()
+      with self.subTest(bots=bots), patch("builtins.print"):
+        self.assertFalse(check_pr(api, "org/repo", 128, bots))
+      self.assertEqual([item["state"] for item in api.statuses], ["pending", "failure"])
 
   def test_closed_pr_does_not_create_a_check(self):
     api = GitHub("test-token")

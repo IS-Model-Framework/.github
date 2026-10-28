@@ -1,18 +1,21 @@
 # Copy to each project's .github/workflows/ai-review-disposition.yml.
-# Both this file and the event collector must exist on the default branch.
+# Install on the default branch; remove the old AI Review Events collector.
 name: AI Review Disposition
-# Recovery reads this routing value if the run fails before publishing a Check.
+# Recovery reads this routing value if the run fails before publishing a status.
 run-name: >-
-  ${{ (github.event_name == 'issues' || inputs.all-open-prs) && 'all-open-prs'
-      || github.event.pull_request.number
+  ${{ (github.event_name == 'issues' || github.event_name == 'schedule'
+       || github.event_name == 'workflow_run' || inputs.all-open-prs) && 'all-open-prs'
       || (github.event_name == 'issue_comment' && github.event.issue.number)
-      || inputs.pr-number || github.event.workflow_run.display_title || '0' }}
+      || inputs.pr-number || '0' }}
 
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize, edited]
+  # Reviews, inline replies and PR head changes are detected by background polls.
+  # Direct PR/review triggers would add native job Checks to the PR page.
+  schedule:
+    - cron: '3-58/5 * * * *'
   workflow_run:
-    workflows: [AI Review Events]
+    # Match the repository's EXISTING CI workflow name; do not add a collector.
+    workflows: [CI]
     types: [completed]
   issue_comment:
     types: [created, edited, deleted]
@@ -26,7 +29,7 @@ on:
         type: number
         default: 0
       all-open-prs:
-        description: 'Explicitly recheck all open PRs after automated Issue changes'
+        description: 'Explicitly recheck all open PRs'
         required: false
         type: boolean
         default: false
@@ -36,25 +39,21 @@ permissions:
   contents: read
   pull-requests: read
   issues: read
-  checks: write
+  statuses: write
 
 jobs:
   disposition:
     if: >-
-      ${{ (github.event_name != 'issue_comment' || github.event.issue.pull_request)
-          && (github.event_name != 'pull_request_target'
-              || github.event.action != 'edited' || github.event.changes.base) }}
+      ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+          && (github.event_name != 'issue_comment' || github.event.issue.pull_request) }}
     uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
     with:
       all-open-prs: >-
-        ${{ github.event_name == 'issues'
+        ${{ contains(fromJSON('["issues","schedule","workflow_run"]'), github.event_name)
             || (github.event_name == 'workflow_dispatch' && inputs.all-open-prs) }}
-      # Collector run-name is the PR number, even when workflow_run.pull_requests is empty.
       pr-number: >-
-        ${{ github.event.pull_request.number
-            || (github.event_name == 'issue_comment' && github.event.issue.number)
-            || fromJSON(inputs.pr-number || '0')
-            || fromJSON(github.event.workflow_run.display_title || '0') }}
-      # Set this repository/organization variable to exact bot logins.
+        ${{ (github.event_name == 'issue_comment' && github.event.issue.number)
+            || fromJSON(inputs.pr-number || '0') }}
+      only-changed: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' }}
       bot-logins: ${{ vars.AI_REVIEW_BOTS }}
       shared-ref: main

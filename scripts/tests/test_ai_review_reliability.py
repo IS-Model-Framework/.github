@@ -228,7 +228,7 @@ class LargeCommitTests(unittest.TestCase):
     self.assertIn("per_page=100&page=4", request.call_args.args[1])
 
 
-class RecoveryStore(fixtures.CheckStore):
+class RecoveryStore(fixtures.StatusStore):
   def __init__(self):
     super().__init__()
     self.source = {
@@ -239,11 +239,6 @@ class RecoveryStore(fixtures.CheckStore):
       "run_number": 2,
       "run_attempt": 1,
     }
-
-  def add(self, *args, **kwargs):
-    check = super().add(*args, **kwargs)
-    self.checks[check["id"]]["app"]["slug"] = "github-actions"
-    return copy.deepcopy(self.checks[check["id"]])
 
   def request(self, method, path, body=None):
     if method == "GET" and "/actions/runs/" in path:
@@ -256,7 +251,13 @@ class RecoveryStore(fixtures.CheckStore):
 class RecoveryTests(unittest.TestCase):
   def setUp(self):
     self.environment = patch.dict(
-      os.environ, {"AI_REVIEW_CHECKS_FILE": "", "GITHUB_STEP_SUMMARY": ""}
+      os.environ,
+      {
+        "AI_REVIEW_CHECKS_FILE": "",
+        "GITHUB_STEP_SUMMARY": "",
+        "GITHUB_RUN_ID": "100",
+        "GITHUB_RUN_ATTEMPT": "1",
+      },
     )
     self.environment.start()
     self.addCleanup(self.environment.stop)
@@ -264,7 +265,7 @@ class RecoveryTests(unittest.TestCase):
   def test_first_metadata_read_failure_revokes_old_success_using_trusted_head(self):
     api = RecoveryStore()
     old = api.add(1)
-    api.checks[old["id"]].update(status="completed", conclusion="success")
+    api.statuses[old["id"] - 1].update(state="success")
     request = api.request
 
     def fail_metadata(method, path, body=None):
@@ -281,39 +282,39 @@ class RecoveryTests(unittest.TestCase):
       self.assertFalse(
         checker.check_pr(api, "org/repo", 128, {fixtures.BOT}, fixtures.HEAD)
       )
-    self.assertEqual(len(api.checks), 1)
-    self.assertEqual(api.gate()[0]["conclusion"], "failure")
+    self.assertEqual(len(api.gate()), 1)
+    self.assertEqual(api.gate()[0]["state"], "failure")
 
   def test_cleanup_marks_same_check_failed_without_new_history(self):
     api = RecoveryStore()
     old = api.add(2)
     self.assertTrue(checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1)))
-    self.assertEqual(len(api.checks), 1)
-    self.assertEqual(api.gate()[0]["id"], old["id"])
-    self.assertEqual(api.gate()[0]["conclusion"], "failure")
-    before = copy.deepcopy(api.checks)
+    self.assertEqual(len(api.gate()), 1)
+    self.assertNotEqual(api.gate()[0]["id"], old["id"])
+    self.assertEqual(api.gate()[0]["state"], "failure")
+    before = copy.deepcopy(api.statuses)
     checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1))
-    self.assertEqual(api.checks, before)
+    self.assertEqual(api.statuses, before)
 
   def test_cleanup_closes_temporary_failure_when_reusing_completed_check(self):
     api = RecoveryStore()
     old = api.add(1)
-    api.checks[old["id"]].update(status="completed", conclusion="success")
-    check = checker.register_check(api, "org/repo", 128, fixtures.HEAD, (2, 1))
-    self.assertEqual(check["conclusion"], "failure")
-    self.assertEqual(check["output"]["title"], "Checking")
+    api.statuses[old["id"] - 1].update(state="success")
+    check = checker.register_status(api, "org/repo", 128, fixtures.HEAD, (2, 1))
+    self.assertEqual(check["state"], "pending")
+    self.assertEqual(check["description"], "Checking PR #128")
     checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1))
-    self.assertEqual(len(api.checks), 1)
-    self.assertEqual(api.gate()[0]["output"]["title"], "Evaluation interrupted")
+    self.assertEqual(len(api.gate()), 1)
+    self.assertIn("Evaluation interrupted", api.gate()[0]["description"])
 
   def test_reused_check_stays_blocked_when_final_publication_fails(self):
     api = RecoveryStore()
     old = api.add(1)
-    api.checks[old["id"]].update(status="completed", conclusion="success")
+    api.statuses[old["id"] - 1].update(state="success")
     request = api.request
 
     def fail_success(method, path, body=None):
-      if method == "PATCH" and (body or {}).get("conclusion") == "success":
+      if method == "POST" and (body or {}).get("state") == "success":
         raise RuntimeError("write failed")
       return request(method, path, body)
 
@@ -328,30 +329,28 @@ class RecoveryTests(unittest.TestCase):
       patch("sys.stderr", new_callable=io.StringIO),
     ):
       self.assertFalse(checker.check_pr(api, "org/repo", 128, {fixtures.BOT}))
-    self.assertEqual(len(api.checks), 1)
-    self.assertEqual(api.gate()[0]["conclusion"], "failure")
-    self.assertEqual(api.gate()[0]["output"]["title"], "Checking")
+    self.assertEqual(len(api.gate()), 1)
+    self.assertEqual(api.gate()[0]["state"], "pending")
+    self.assertEqual(api.gate()[0]["description"], "Checking PR #128")
 
   def test_old_cleanup_cannot_replace_newer_success_or_pending(self):
-    for status in ("completed", "in_progress"):
+    for status in ("success", "pending"):
       api = RecoveryStore()
       newest = api.add(3)
-      api.checks[newest["id"]].update(
-        status=status, conclusion="success" if status == "completed" else None
-      )
-      before = copy.deepcopy(api.checks)
+      api.statuses[newest["id"] - 1].update(state=status)
+      before = copy.deepcopy(api.statuses)
       checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1))
-      self.assertEqual(api.checks, before)
+      self.assertEqual(api.statuses, before)
 
   def test_recovery_routes_to_workers_without_writing_checks(self):
     api = RecoveryStore()
     api.add(1)
-    before = copy.deepcopy(api.checks)
+    before = copy.deepcopy(api.statuses)
     self.assertEqual(
       checker.prepare_targets(api, "org/repo", recover=999),
       [{"number": 128, "head": fixtures.HEAD}],
     )
-    self.assertEqual(api.checks, before)
+    self.assertEqual(api.statuses, before)
 
   def test_recovery_rejects_unrelated_workflows_and_invalid_routing(self):
     for field, value in (
@@ -362,14 +361,14 @@ class RecoveryTests(unittest.TestCase):
       api.source[field] = value
       with self.subTest(field=field), self.assertRaises(ValueError):
         checker.recovery_targets(api, "org/repo", 999)
-      self.assertEqual(api.checks, {})
+      self.assertEqual(api.statuses, [])
 
   def test_running_rerun_or_success_routes_no_recovery(self):
     for changes in ({"status": "in_progress"}, {"conclusion": "success"}):
       api = RecoveryStore()
       api.source.update(changes)
       self.assertEqual(checker.recovery_targets(api, "org/repo", 999), [])
-      self.assertEqual(api.checks, {})
+      self.assertEqual(api.statuses, [])
 
   def test_routing_does_not_need_bot_configuration(self):
     with (
@@ -408,7 +407,7 @@ class RecoveryTests(unittest.TestCase):
     ]
     with patch.object(api, "pages", return_value=prs):
       self.assertEqual(len(checker.prepare_targets(api, "org/repo", recover=999)), 4)
-    self.assertEqual(api.checks, {})
+    self.assertEqual(api.statuses, [])
 
   def test_local_journal_cleanup_closes_interrupted_checks(self):
     api = RecoveryStore()
@@ -417,9 +416,9 @@ class RecoveryTests(unittest.TestCase):
       with patch.dict(
         os.environ, {"AI_REVIEW_CHECKS_FILE": path, "GITHUB_RUN_NUMBER": "2"}
       ):
-        checker.register_check(api, "org/repo", 128, fixtures.HEAD)
+        checker.register_status(api, "org/repo", 128, fixtures.HEAD)
         self.assertTrue(checker.cleanup_file(api, "org/repo", path))
-      self.assertEqual(api.gate()[0]["conclusion"], "failure")
+      self.assertEqual(api.gate()[0]["state"], "failure")
 
   def test_final_check_list_or_patch_failure_reports_recovery_instead_of_success(self):
     for fail_list in (False, True):
@@ -427,7 +426,7 @@ class RecoveryTests(unittest.TestCase):
       request = api.request
 
       def fail_publish(method, path, body=None, request=request):
-        if method == "PATCH" and (body or {}).get("conclusion") == "success":
+        if method == "POST" and (body or {}).get("state") == "success":
           raise RuntimeError("write failed")
         return request(method, path, body)
 
@@ -441,7 +440,7 @@ class RecoveryTests(unittest.TestCase):
         ),
         patch.object(
           checker,
-          "current_check",
+          "current_status",
           side_effect=[True, RuntimeError("list failed")]
           if fail_list
           else [True, True],
@@ -449,9 +448,9 @@ class RecoveryTests(unittest.TestCase):
         patch("sys.stderr", new_callable=io.StringIO) as stderr,
       ):
         self.assertFalse(checker.check_pr(api, "org/repo", 128, {fixtures.BOT}))
-        self.assertIn("in_progress", stderr.getvalue())
+        self.assertIn("pending", stderr.getvalue())
         self.assertIn("dispatch", stderr.getvalue())
-      self.assertEqual(api.gate()[0]["status"], "in_progress")
+      self.assertEqual(api.gate()[0]["state"], "pending")
 
   def test_routing_outputs_matrix_for_worker_queue_without_check_writes(self):
     api = RecoveryStore()
@@ -479,26 +478,20 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(checker.main(), 0)
       self.assertIn('"include":[{"number":128,"head":', output.read_text())
       self.assertIn("has-targets=true", output.read_text())
-    self.assertEqual(api.checks, {})
+    self.assertEqual(api.statuses, [])
 
-  def test_shared_workflow_uses_one_worker_queue_for_all_entry_points(self):
+  def test_shared_workflow_uses_one_background_worker_queue_for_all_entry_points(self):
     workflow = (
       Path(__file__).resolve().parents[2]
       / ".github/workflows/reusable-ai-review-disposition.yml"
     ).read_text()
-    self.assertIn(
-      "group: ai-review-disposition-${{ github.repository }}-${{ matrix.number }}",
-      workflow,
-    )
+    self.assertIn("group: ai-review-disposition-${{ github.repository }}", workflow)
     self.assertIn("cancel-in-progress: false", workflow)
-    self.assertIn("fail-fast: false", workflow)
-    self.assertIn("max-parallel: 4", workflow)
-    self.assertIn("--prepare-targets --all-open-prs", workflow)
-    self.assertIn("--prepare-targets --recover-run", workflow)
-    self.assertNotIn(
-      '--recover-run "$RECOVER_RUN_ID"\n        elif',
-      workflow.split("  disposition:")[1],
-    )
+    self.assertNotIn("matrix:", workflow)
+    self.assertIn("args+=(--all-open-prs)", workflow)
+    self.assertIn('args+=(--recover-run "$RECOVER_RUN_ID")', workflow)
+    self.assertIn("statuses: write", workflow)
+    self.assertNotIn("checks: write", workflow)
 
 
 if __name__ == "__main__":

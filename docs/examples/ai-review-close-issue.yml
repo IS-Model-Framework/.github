@@ -37,6 +37,6 @@ jobs:
         gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER" \
           --method PATCH -f state=closed > /dev/null
         # Issue events from GITHUB_TOKEN do not start Actions; dispatch does.
-        # Reuse the SAME caller so its run numbers still order newer results.
+        # Reuse the same caller and its repository-wide writer queue.
         gh workflow run ai-review-disposition.yml --repo "$GITHUB_REPOSITORY" \
           --ref "$DEFAULT_BRANCH" -f all-open-prs=true
