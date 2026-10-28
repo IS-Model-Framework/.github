@@ -58,15 +58,15 @@ DEFAULT_BRANCH 为仓库默认分支，负责 dispatch 的 job 需要 `actions: 
 
 手动检查填写正整数 pr-number；全仓复查勾选 all-open-prs、保持编号 0。默认不会隐式全仓扫描。CI 始终实时读取 PR 并将 Check 写入最新 head；通过前再次读取数据，清缓存复核权限和 Issue 状态。只读 REST/GraphQL 请求遇瞬时网络错误、429、500/502/503/504 或带 Retry-After 的 403 时最多尝试 3 次；遵守 Retry-After，等待超过 60 秒则中止并报告失败，不提前重试。创建/修改 Check 不盲重试。数据变化或读取失败不发布成功，Issue 的 404/410 会给出具体 Tracking 提示。
 
-同一 PR 的全部 worker 共用一个 concurrency group，cancel-in-progress=false；正在运行的 worker 保持执行，等待中的重复触发由最新任务合并替代。不同 PR 可并行。worker 开始后重新读取当前 head；同一仓库、PR、head 和 GitHub Actions App 复用同一 Check ID，重新设为 in_progress，再更新结果。新 head 单独创建 Check；不会再创建或改名出 superseded 项，既有历史记录不整理。重跑旧 run ID/attempt 不能接管更新运行。
+同一 PR 的全部 worker 共用一个 concurrency group，cancel-in-progress=false；正在运行的 worker 保持执行，等待中的重复触发由最新任务合并替代。不同 PR 可并行。worker 开始后重新读取当前 head；同一仓库、PR、head 和 GitHub Actions App 复用同一 Check ID，再更新结果。GitHub 对已完成 Check 的 status-only PATCH 会保留旧 conclusion，REST 不接受 null conclusion/completed_at，GraphQL 显式 null 也未重置；因此复查开始时原地发布临时 failure，标题 Checking，确保旧 success 立即失效，结束后再发布真实结论。首次创建仍使用 in_progress；Actions worker 显示执行进度。每次最终发布刷新 completed_at。新 head 单独创建 Check；不会再创建或改名出 superseded 项，既有历史记录不整理。重跑旧 run ID/attempt 不能接管更新运行。
 
 此方案无需外部服务。GitHub 自动产生的路由、评估及事件收集 job Check 仍可能出现在 PR 页面；唯一业务门禁是 AI Review / Disposition Check，不能据此承诺整页仅一项。实验工作流发布的 Integration Test 也不属于正式检查器管理范围。
 
-普通退出由 always 收尾在释放同一个 PR 并发槽前读取本机登记日志，仅将仍由自己持有的未完成 Check 原地标记 failure。硬超时、取消、检出/初始化失败由默认分支的 workflow_run 恢复入口定位目标，再进入同一个 worker 队列重新检查实时数据；恢复不直接写 Check，也不会创建替代 Check。恢复重新评估可能得到正常的 success 或业务 failure。仅读取可信脚本写出的本机日志或实时 API，不下载或执行来源工作流的 artifact。最终发布失败会记录 Check ID 和重新 dispatch 的提示。
+普通退出由 always 收尾在释放同一个 PR 并发槽前读取本机登记日志，仅将仍由自己持有的 in_progress 或临时 Checking 结果原地标记中断 failure。硬超时、取消、检出/初始化失败由默认分支的 workflow_run 恢复入口定位目标，再进入同一个 worker 队列重新检查实时数据；恢复不直接写 Check，也不会创建替代 Check。恢复重新评估可能得到正常的 success 或业务 failure。仅读取可信脚本写出的本机日志或实时 API，不下载或执行来源工作流的 artifact。最终发布失败会记录 Check ID 和重新 dispatch 的提示。
 
 Checks API 的 ownership 校验与 PATCH 不是原子操作。并发槽约束正常运行的 Actions writer；人为硬取消时已经送出的 HTTP 写入仍有极短的竞态，复用单一 Check ID 无法提供旧方案不同 ID 的隔离保证。不要另行直接调用 Checks API 写这个门禁；发生中断或 API 异常后应等待恢复并检查最新结果。
 
-恢复是异步的：事件发生到新 Check 登记、或失败到恢复运行之间存在窗口。若首次读取、枚举或登记失败，旧 success 可能在恢复前仍可见；GitHub API 完全不可读写、恢复入口未安装或自身失败时，脚本无法保证立即撤销它。必须监控 caller/恢复运行失败并重新 dispatch；要求这个窗口内也绝不允许合并时，需额外的 GitHub 侧合并门禁，不能仅依赖本异步检查。登记后的遗留 in_progress 会继续阻断。
+恢复是异步的：事件发生到新 Check 登记、或失败到恢复运行之间存在窗口。若首次读取、枚举或登记失败，旧 success 可能在恢复前仍可见；GitHub API 完全不可读写、恢复入口未安装或自身失败时，脚本无法保证立即撤销它。必须监控 caller/恢复运行失败并重新 dispatch；要求这个窗口内也绝不允许合并时，需额外的 GitHub 侧合并门禁，不能仅依赖本异步检查。登记后的遗留 in_progress 或临时 Checking failure 会继续阻断。
 
 ## 验证与边界
 

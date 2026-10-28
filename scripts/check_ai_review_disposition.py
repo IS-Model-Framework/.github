@@ -451,6 +451,13 @@ def register_check(api, repository, number, head, sequence=None):
     "output": {"title": "Checking", "summary": f"Evaluating PR #{number} at {head}."},
   }
   if previous:
+    # Completed Checks cannot reliably return to in_progress. Revoke old
+    # success explicitly while keeping the same ID and showing progress in output.
+    body.update(
+      status="completed",
+      conclusion="failure",
+      completed_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
     check = api.request(
       "PATCH", f"/repos/{repository}/check-runs/{previous['id']}", body
     )
@@ -484,7 +491,10 @@ def finish_pending(api, repository, number, head, sequence):
   if not own:
     return True
   check = max(own, key=lambda run: run["id"])
-  if check["status"] == "completed":
+  if (
+    check["status"] == "completed"
+    and check.get("output", {}).get("title") != "Checking"
+  ):
     return True
   if current_check(api, repository, number, head, check):
     api.request(
@@ -493,6 +503,7 @@ def finish_pending(api, repository, number, head, sequence):
       {
         "status": "completed",
         "conclusion": "failure",
+        "completed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "output": {
           "title": "Evaluation interrupted",
           "summary": "Evaluation interrupted; dispatch a new disposition check.",
@@ -643,6 +654,7 @@ def check_pr(api, repository, number, bots, head=None):
       {
         "status": "completed",
         "conclusion": "success" if ok else "failure",
+        "completed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "output": {"title": "Passed" if ok else "Failed", "summary": report[:60000]},
       },
     )
@@ -685,7 +697,7 @@ def main():
   )
   parser.add_argument(
     "--head-sha",
-    help="Trusted head from the routing job; register before reading PR data",
+    help="Trusted head from routing; register even if the first live PR read fails",
   )
   parser.add_argument("--bots", default=os.environ.get("AI_REVIEW_BOTS", ""))
   args = parser.parse_args()

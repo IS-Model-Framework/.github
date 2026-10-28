@@ -295,6 +295,43 @@ class RecoveryTests(unittest.TestCase):
     checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1))
     self.assertEqual(api.checks, before)
 
+  def test_cleanup_closes_temporary_failure_when_reusing_completed_check(self):
+    api = RecoveryStore()
+    old = api.add(1)
+    api.checks[old["id"]].update(status="completed", conclusion="success")
+    check = checker.register_check(api, "org/repo", 128, fixtures.HEAD, (2, 1))
+    self.assertEqual(check["conclusion"], "failure")
+    self.assertEqual(check["output"]["title"], "Checking")
+    checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1))
+    self.assertEqual(len(api.checks), 1)
+    self.assertEqual(api.gate()[0]["output"]["title"], "Evaluation interrupted")
+
+  def test_reused_check_stays_blocked_when_final_publication_fails(self):
+    api = RecoveryStore()
+    old = api.add(1)
+    api.checks[old["id"]].update(status="completed", conclusion="success")
+    request = api.request
+
+    def fail_success(method, path, body=None):
+      if method == "PATCH" and (body or {}).get("conclusion") == "success":
+        raise RuntimeError("write failed")
+      return request(method, path, body)
+
+    with (
+      patch.dict(os.environ, {"GITHUB_RUN_ID": "2", "GITHUB_RUN_ATTEMPT": "1"}),
+      patch.object(api, "request", side_effect=fail_success),
+      patch.object(
+        checker,
+        "snapshot",
+        return_value=fixtures.fixture("Disposition: Invalid\nReason: Test"),
+      ),
+      patch("sys.stderr", new_callable=io.StringIO),
+    ):
+      self.assertFalse(checker.check_pr(api, "org/repo", 128, {fixtures.BOT}))
+    self.assertEqual(len(api.checks), 1)
+    self.assertEqual(api.gate()[0]["conclusion"], "failure")
+    self.assertEqual(api.gate()[0]["output"]["title"], "Checking")
+
   def test_old_cleanup_cannot_replace_newer_success_or_pending(self):
     for status in ("completed", "in_progress"):
       api = RecoveryStore()

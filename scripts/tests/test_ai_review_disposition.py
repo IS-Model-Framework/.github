@@ -1079,8 +1079,9 @@ class CheckStore(GitHub):
     if method == "PATCH":
       check = self.checks[int(path.rsplit("/", 1)[1])]
       check.update(copy.deepcopy(body))
-      if body.get("status") == "in_progress":
-        check["conclusion"] = None
+      # GitHub retains a stored conclusion unless it is explicitly cleared.
+      if check.get("conclusion") is not None:
+        check["status"] = "completed"
       return copy.deepcopy(check)
     raise AssertionError(f"Unexpected API call: {method} {path}")
 
@@ -1115,8 +1116,10 @@ class LatestCheckTests(unittest.TestCase):
     api.checks[check["id"]].update(status="completed", conclusion="success")
     newer = register_check(api, "org/repo", 128, HEAD, (2, 1))
     self.assertEqual(check["id"], newer["id"])
-    self.assertEqual(newer["status"], "in_progress")
-    self.assertIsNone(newer["conclusion"])
+    self.assertEqual(newer["status"], "completed")
+    self.assertEqual(newer["conclusion"], "failure")
+    self.assertEqual(newer["output"]["title"], "Checking")
+    self.assertRegex(newer["completed_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
     self.assertFalse(current_check(api, "org/repo", 128, HEAD, check))
     self.assertTrue(current_check(api, "org/repo", 128, HEAD, newer))
 
