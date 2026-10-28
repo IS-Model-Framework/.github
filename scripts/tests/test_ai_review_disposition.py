@@ -12,6 +12,8 @@ from scripts.check_ai_review_disposition import (
   GitHub,
   check_pr,
   current_check,
+  register_check,
+  prepare_targets,
   evaluate,
   main,
   parse_disposition,
@@ -729,6 +731,7 @@ class ApiTests(unittest.TestCase):
             api, "request", side_effect=[pr, {"id": 99}, pr, pr, pr, pr, {}]
           ) as request,
           patch.object(api, "graphql", side_effect=graphql),
+          patch.object(api, "pages", return_value=[]),
           patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}),
           patch("builtins.print"),
         ):
@@ -1026,6 +1029,7 @@ class ApiTests(unittest.TestCase):
 
     with (
       patch.object(api, "request", side_effect=respond) as request,
+      patch.object(api, "pages", return_value=[]),
       patch("scripts.check_ai_review_disposition.current_check", return_value=True),
       patch("scripts.check_ai_review_disposition.snapshot", side_effect=snapshots),
       patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}),
@@ -1048,7 +1052,7 @@ class CheckStore(GitHub):
       "name": CHECK_NAME,
       "head_sha": HEAD,
       "status": "in_progress",
-      "app": {"id": app},
+      "app": {"id": app, "slug": "github-actions" if app == 1 else "other"},
       "external_id": f"ai-review-disposition:{number}:{run}:{attempt}",
     }
     self.checks[check["id"]] = check
@@ -1061,14 +1065,22 @@ class CheckStore(GitHub):
       check = self.add(0)
       self.checks[check["id"]].update(copy.deepcopy(body))
       return copy.deepcopy(self.checks[check["id"]])
+    if method == "GET" and "/check-runs/" in path:
+      return copy.deepcopy(self.checks[int(path.rsplit("/", 1)[1])])
     if method == "GET":
       query = parse_qs(urlsplit(path).query)
-      runs = [c for c in self.checks.values() if c["name"] == query["check_name"][0]]
+      runs = [
+        c
+        for c in self.checks.values()
+        if c["name"] == query["check_name"][0] and c["head_sha"] in path
+      ]
       start = (int(query["page"][0]) - 1) * 100
       return {"check_runs": copy.deepcopy(runs[start : start + 100])}
     if method == "PATCH":
       check = self.checks[int(path.rsplit("/", 1)[1])]
       check.update(copy.deepcopy(body))
+      if body.get("status") == "in_progress":
+        check["conclusion"] = None
       return copy.deepcopy(check)
     raise AssertionError(f"Unexpected API call: {method} {path}")
 
@@ -1077,115 +1089,104 @@ class CheckStore(GitHub):
 
 
 class LatestCheckTests(unittest.TestCase):
-  def claim(self, api, check):
-    return current_check(api, "org/repo", 128, HEAD, check)
-
-  def test_late_old_result_cannot_override_new_failure_or_success(self):
-    for new_passes in (False, True):
-      with self.subTest(new_passes=new_passes):
-        api = CheckStore()
-        ready = fixture("Disposition: Invalid\nReason: Test")
-        missing = fixture()
-        old_data, new_data = (missing, ready) if new_passes else (ready, missing)
-        started = False
-
-        def old_snapshot(
-          *args, api=api, new_data=new_data, new_passes=new_passes, old_data=old_data
-        ):
-          nonlocal started
-          if not started:
-            started = True
-            with (
-              patch.dict("os.environ", {"GITHUB_RUN_NUMBER": "2"}),
-              patch(
-                "scripts.check_ai_review_disposition.snapshot", return_value=new_data
-              ),
-            ):
-              self.assertEqual(check_pr(api, "org/repo", 128, {BOT}), new_passes)
-          return old_data
-
+  def test_twenty_serial_evaluations_reuse_one_check_and_publish_latest_result(self):
+    api = CheckStore()
+    ready = fixture("Disposition: Invalid\nReason: Test")
+    with patch("builtins.print"), patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+      for run in range(1, 21):
+        ok = run % 2 == 0
         with (
           patch.dict(
-            "os.environ",
-            {
-              "GITHUB_RUN_NUMBER": "1",
-              "GITHUB_RUN_ATTEMPT": "1",
-              "GITHUB_STEP_SUMMARY": "",
-            },
+            "os.environ", {"GITHUB_RUN_ID": str(run), "GITHUB_RUN_ATTEMPT": "1"}
           ),
           patch(
-            "scripts.check_ai_review_disposition.snapshot", side_effect=old_snapshot
+            "scripts.check_ai_review_disposition.snapshot",
+            return_value=ready if ok else fixture(),
           ),
-          patch("builtins.print"),
         ):
-          self.assertTrue(check_pr(api, "org/repo", 128, {BOT}))
-        # Even an already-sent result that arrives late never restores the gate name.
-        api.request(
-          "PATCH",
-          "/repos/org/repo/check-runs/1",
-          {"status": "completed", "conclusion": "success"},
-        )
-        self.assertEqual(len(api.gate()), 1)
-        self.assertEqual(api.gate()[0]["id"], 2)
-        self.assertEqual(
-          api.gate()[0]["conclusion"], "success" if new_passes else "failure"
-        )
+          self.assertEqual(check_pr(api, "org/repo", 128, {BOT}), ok)
+        self.assertEqual(len(api.checks), 1)
+        self.assertEqual(api.checks[1]["conclusion"], "success" if ok else "failure")
+    self.assertEqual(api.checks[1]["external_id"], "ai-review-disposition:128:20:1")
 
-  def test_new_pending_or_cancelled_run_never_falls_back_to_old_success(self):
+  def test_reopening_a_success_blocks_without_creating_history(self):
     api = CheckStore()
-    old = api.add(1)
-    api.checks[old["id"]].update(status="completed", conclusion="success")
-    new = api.add(2)
-    self.assertTrue(self.claim(api, new))
-    self.assertEqual(api.gate()[0]["status"], "in_progress")
-    api.checks[new["id"]].update(status="completed", conclusion="cancelled")
-    self.assertFalse(self.claim(api, old))
-    self.assertEqual(api.gate()[0]["conclusion"], "cancelled")
+    check = register_check(api, "org/repo", 128, HEAD, (1, 1))
+    api.checks[check["id"]].update(status="completed", conclusion="success")
+    newer = register_check(api, "org/repo", 128, HEAD, (2, 1))
+    self.assertEqual(check["id"], newer["id"])
+    self.assertEqual(newer["status"], "in_progress")
+    self.assertIsNone(newer["conclusion"])
+    self.assertFalse(current_check(api, "org/repo", 128, HEAD, check))
+    self.assertTrue(current_check(api, "org/repo", 128, HEAD, newer))
 
-  def test_a_delayed_older_registration_does_not_take_over(self):
+  def test_delayed_old_registration_and_rerun_cannot_take_over(self):
     api = CheckStore()
-    new = api.add(2)
-    old = api.add(1)
-    self.assertFalse(self.claim(api, old))
-    self.assertEqual([c["id"] for c in api.gate()], [new["id"]])
+    check = register_check(api, "org/repo", 128, HEAD, (20, 1))
+    self.assertIsNone(register_check(api, "org/repo", 128, HEAD, (19, 99)))
+    newer = register_check(api, "org/repo", 128, HEAD, (20, 2))
+    self.assertEqual(newer["id"], check["id"])
+    self.assertFalse(current_check(api, "org/repo", 128, HEAD, check))
+    self.assertIsNone(register_check(api, "org/repo", 128, HEAD, (20, 1)))
+    self.assertEqual(len(api.checks), 1)
 
-  def test_rerun_of_latest_generation_replaces_its_previous_attempt(self):
+  def test_recovery_workflow_uses_global_run_id_instead_of_local_run_number(self):
     api = CheckStore()
-    old = api.add(2)
-    new = api.add(2, attempt=2)
-    self.assertTrue(self.claim(api, new))
-    self.assertFalse(self.claim(api, old))
+    register_check(api, "org/repo", 128, HEAD, (100, 1))
+    with patch.dict(
+      "os.environ",
+      {"GITHUB_RUN_ID": "101", "GITHUB_RUN_NUMBER": "1", "GITHUB_RUN_ATTEMPT": "1"},
+    ):
+      newer = register_check(api, "org/repo", 128, HEAD)
+    self.assertEqual(newer["external_id"], "ai-review-disposition:128:101:1")
+    self.assertEqual(len(api.checks), 1)
 
-  def test_check_history_is_paginated_and_other_apps_or_prs_are_untouched(self):
+  def test_existing_history_other_apps_prs_and_ci_are_untouched(self):
     api = CheckStore()
     for run in range(1, 102):
       newest = api.add(run)
-    other_app = api.add(999, app=2)
-    other_pr = api.add(999, number=129)
-    self.assertTrue(self.claim(api, newest))
-    self.assertEqual(api.checks[1]["conclusion"], "cancelled")
-    self.assertEqual(api.checks[newest["id"]]["name"], CHECK_NAME)
-    for check in (other_app, other_pr):
-      self.assertEqual(api.checks[check["id"]], check)
+    api.add(999, app=2)
+    api.add(999, number=129)
+    ci = api.add(999)
+    api.checks[ci["id"]]["name"] = "Unrelated CI"
+    old = api.add(0)
+    api.checks[old["id"]]["name"] += " (superseded #104)"
+    before = copy.deepcopy(api.checks)
+    check = register_check(api, "org/repo", 128, HEAD, (102, 1))
+    self.assertEqual(check["id"], newest["id"])
+    self.assertEqual(len(api.checks), len(before))
+    for key in before:
+      if key != newest["id"]:
+        self.assertEqual(api.checks[key], before[key])
 
-  def test_manual_cli_check_does_not_permanently_fence_out_future_actions(self):
+  def test_new_head_gets_its_own_check(self):
     api = CheckStore()
-    api.add(1)
-    manual = api.add(0)
-    self.assertTrue(self.claim(api, manual))
-    future = api.add(2)
-    self.assertTrue(self.claim(api, future))
-    self.assertFalse(self.claim(api, manual))
+    first = register_check(api, "org/repo", 128, HEAD, (1, 1))
+    other_head = "c" * 40
+    second = register_check(api, "org/repo", 128, other_head, (2, 1))
+    self.assertNotEqual(first["id"], second["id"])
+    self.assertEqual(len(api.checks), 2)
+    self.assertEqual(
+      register_check(api, "org/repo", 128, other_head, (3, 1))["id"], second["id"]
+    )
 
-  def test_legacy_check_without_external_id_is_replaced(self):
-    for external_id in (None, ""):
-      with self.subTest(external_id=external_id):
-        api = CheckStore()
-        old = api.add(0)
-        api.checks[old["id"]]["external_id"] = external_id
-        new = api.add(1)
-        self.assertTrue(self.claim(api, new))
-        self.assertEqual([c["id"] for c in api.gate()], [new["id"]])
+  def test_legacy_check_without_external_id_is_reused(self):
+    api = CheckStore()
+    old = api.add(0)
+    api.checks[old["id"]]["external_id"] = ""
+    self.assertEqual(
+      register_check(api, "org/repo", 128, HEAD, (1, 1))["id"], old["id"]
+    )
+    self.assertEqual(len(api.checks), 1)
+
+  def test_queued_worker_uses_live_head_instead_of_router_snapshot(self):
+    api = CheckStore()
+    with (
+      patch("scripts.check_ai_review_disposition.snapshot", return_value=fixture()),
+      patch("builtins.print"),
+    ):
+      self.assertFalse(check_pr(api, "org/repo", 128, {BOT}, "c" * 40))
+    self.assertEqual(api.gate()[0]["head_sha"], HEAD)
 
 
 class MainTests(unittest.TestCase):
@@ -1213,27 +1214,23 @@ class MainTests(unittest.TestCase):
         check.side_effect = results
       return main(), client, check
 
-  def test_explicit_sweep_checks_all_open_prs_even_after_failure(self):
-    code, client, check = self.run_main(
-      "--all-open-prs", passed=False, numbers=[24, 7, 24]
-    )
-    self.assertEqual(code, 1)
-    self.assertEqual(sorted(c.args[2] for c in check.call_args_list), [7, 24])
-    client.return_value.pages.assert_called_once_with(
-      "/repos/org/repo/pulls?state=open"
-    )
+  def test_sweep_only_routes_all_targets_without_writing_checks(self):
+    api = CheckStore()
+    prs = [{"number": n, "state": "open", "head": {"sha": HEAD}} for n in [24, 7, 24]]
+    with patch.object(api, "pages", return_value=prs):
+      self.assertEqual(
+        prepare_targets(api, "org/repo", all_open=True),
+        [{"number": n, "head": HEAD} for n in [7, 24]],
+      )
+    self.assertEqual(api.checks, {})
 
-  def test_sweep_continues_after_a_pr_api_error(self):
-    code, _, check = self.run_main(
-      "--all-open-prs", numbers=[1, 2, 3], results=[RuntimeError("failed"), True, True]
-    )
-    self.assertEqual(code, 1)
-    self.assertEqual(sorted(c.args[2] for c in check.call_args_list), [1, 2, 3])
+  def test_empty_sweep_routes_no_workers(self):
+    with patch.object(GitHub, "pages", return_value=[]):
+      self.assertEqual(prepare_targets(GitHub("token"), "org/repo", all_open=True), [])
 
-  def test_empty_open_pr_sweep_does_not_publish_checks(self):
-    code, _, check = self.run_main("--all-open-prs", numbers=[])
-    self.assertEqual(code, 0)
-    check.assert_not_called()
+  def test_direct_sweep_is_rejected_to_prevent_bypassing_worker_queue(self):
+    with self.assertRaises(SystemExit):
+      self.run_main("--all-open-prs")
 
   def test_open_pr_enumeration_reads_all_pages_without_issue_backlinks(self):
     api = GitHub("test-token")

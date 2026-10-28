@@ -7,7 +7,6 @@ import os
 import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from functools import cache
@@ -402,65 +401,63 @@ def summary(number, head, result):
 
 
 def current_check(api, repository, number, head, check):
-  """Only one fixed-name gate remains; late writes cannot rename it back."""
-  path = f"/repos/{repository}/commits/{head}/check-runs"
-  runs = api.pages(
-    f"{path}?check_name={quote(CHECK_NAME, safe='')}&filter=all", "check_runs"
+  """Verify ownership; the shared per-PR Actions queue serializes all writers."""
+  live = api.request("GET", f"/repos/{repository}/check-runs/{check['id']}")
+  return (
+    live["name"] == CHECK_NAME
+    and live["head_sha"] == head
+    and live.get("external_id") == check["external_id"]
+    and live["app"]["id"] == check["app"]["id"]
   )
-  prefix = f"ai-review-disposition:{number}:"
-  runs = [
-    run
-    for run in runs
-    if run["app"]["id"] == check["app"]["id"]
-    and (not run.get("external_id") or run["external_id"].startswith(prefix))
-  ]
-  runs = {run["id"]: run for run in [*runs, check]}.values()
-
-  def order(run):
-    key = re.fullmatch(
-      re.escape(prefix) + r"([0-9]+):([0-9]+)", run.get("external_id") or ""
-    )
-    return (int(key[1]), int(key[2]), run["id"]) if key and int(key[1]) else None
-
-  managed = [run for run in runs if order(run)]
-  newest = max(managed, key=order) if managed else check
-  # An explicit local CLI check is ordered by registration, not an Actions sequence.
-  newest = max(
-    [newest, *(run for run in runs if not order(run))], key=lambda run: run["id"]
-  )
-  for run in runs:
-    if run["id"] != newest["id"]:
-      api.request(
-        "PATCH",
-        f"/repos/{repository}/check-runs/{run['id']}",
-        {
-          "name": f"{CHECK_NAME} (superseded #{run['id']})",
-          "status": "completed",
-          "conclusion": "cancelled",
-        },
-      )
-  return newest["id"] == check["id"]
 
 
 def generation():
   return (
-    int(os.environ.get("GITHUB_RUN_NUMBER", "0")),
+    # Run IDs are comparable across caller and recovery workflows; run numbers are not.
+    int(os.environ.get("GITHUB_RUN_ID", os.environ.get("GITHUB_RUN_NUMBER", "0"))),
     int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
   )
 
 
 def register_check(api, repository, number, head, sequence=None):
+  """Get or reopen one managed Check. Call only inside the per-PR writer queue."""
   run, attempt = sequence if sequence is not None else generation()
-  check = api.request(
-    "POST",
-    f"/repos/{repository}/check-runs",
-    {
-      "name": CHECK_NAME,
-      "head_sha": head,
-      "status": "in_progress",
-      "external_id": f"ai-review-disposition:{number}:{run}:{attempt}",
-    },
+  prefix = f"ai-review-disposition:{number}:"
+  runs = api.pages(
+    f"/repos/{repository}/commits/{head}/check-runs"
+    f"?check_name={quote(CHECK_NAME, safe='')}&filter=all",
+    "check_runs",
   )
+  runs = [
+    check
+    for check in runs
+    if check["app"].get("slug") == "github-actions"
+    and (not check.get("external_id") or check["external_id"].startswith(prefix))
+  ]
+
+  def order(check):
+    match = re.fullmatch(
+      re.escape(prefix) + r"([0-9]+):([0-9]+)", check.get("external_id") or ""
+    )
+    return (int(match[1]), int(match[2]), check["id"]) if match else (0, 0, check["id"])
+
+  previous = max(runs, key=order) if runs else None
+  if previous and run and order(previous)[:2] > (run, attempt):
+    return None
+  body = {
+    "name": CHECK_NAME,
+    "status": "in_progress",
+    "external_id": f"{prefix}{run}:{attempt}",
+    "output": {"title": "Checking", "summary": f"Evaluating PR #{number} at {head}."},
+  }
+  if previous:
+    check = api.request(
+      "PATCH", f"/repos/{repository}/check-runs/{previous['id']}", body
+    )
+  else:
+    check = api.request(
+      "POST", f"/repos/{repository}/check-runs", {"head_sha": head, **body}
+    )
   journal = os.environ.get("AI_REVIEW_CHECKS_FILE")
   if journal:
     with JOURNAL_LOCK, open(journal, "a", encoding="utf-8") as stream:
@@ -471,7 +468,7 @@ def register_check(api, repository, number, head, sequence=None):
 
 
 def finish_pending(api, repository, number, head, sequence):
-  """Fence a failed run with a new Check ID so a late success cannot resurrect it."""
+  """Close this job's unfinished Check before releasing its per-PR writer queue."""
   external_id = f"ai-review-disposition:{number}:{sequence[0]}:{sequence[1]}"
   runs = api.pages(
     f"/repos/{repository}/commits/{head}/check-runs"
@@ -484,9 +481,11 @@ def finish_pending(api, repository, number, head, sequence):
     if run.get("external_id") == external_id
     and run["app"].get("slug") == "github-actions"
   ]
-  if own and max(own, key=lambda run: run["id"])["status"] == "completed":
+  if not own:
     return True
-  check = register_check(api, repository, number, head, sequence)
+  check = max(own, key=lambda run: run["id"])
+  if check["status"] == "completed":
+    return True
   if current_check(api, repository, number, head, check):
     api.request(
       "PATCH",
@@ -503,24 +502,6 @@ def finish_pending(api, repository, number, head, sequence):
   return True
 
 
-def run_parallel(targets, operation):
-  """Bound API concurrency and keep processing after any target fails."""
-  ok = True
-  with ThreadPoolExecutor(max_workers=4) as pool:
-    futures = {pool.submit(operation, target): target for target in targets}
-    for future in as_completed(futures):
-      try:
-        ok = future.result() and ok
-      except Exception as error:
-        print(
-          f"Disposition target {futures[future]} failed ({type(error).__name__}); "
-          "check may remain in_progress; dispatch a new check.",
-          file=sys.stderr,
-        )
-        ok = False
-  return ok
-
-
 def cleanup_file(api, repository, path):
   if not os.path.exists(path):
     return True
@@ -531,11 +512,14 @@ def cleanup_file(api, repository, path):
       if line.strip()
       for item in [json.loads(line)]
     }
-  return run_parallel(targets, lambda target: finish_pending(api, repository, *target))
+  ok = True
+  for target in sorted(targets):
+    ok = finish_pending(api, repository, *target) and ok
+  return ok
 
 
-def recover_run(api, repository, run_id):
-  """Default-branch recovery also covers failures before Check registration."""
+def recovery_targets(api, repository, run_id):
+  """Route recovery to the same per-PR workers; this function never writes Checks."""
   run = api.request("GET", f"/repos/{repository}/actions/runs/{run_id}")
   if run["path"] != ".github/workflows/ai-review-disposition.yml":
     raise ValueError("Recovery requires the documented caller workflow")
@@ -546,7 +530,7 @@ def recover_run(api, repository, run_id):
     "action_required",
     "startup_failure",
   }:
-    return True
+    return []
   title = run["display_title"]
   if title == "all-open-prs":
     prs = api.pages(f"/repos/{repository}/pulls?state=open")
@@ -554,22 +538,41 @@ def recover_run(api, repository, run_id):
     prs = [api.request("GET", f"/repos/{repository}/pulls/{title}")]
   else:
     raise ValueError("Recovery requires a PR number or all-open-prs run-name")
-  sequence = (run["run_number"], run["run_attempt"])
-  targets = [
-    (pr["number"], pr["head"]["sha"], sequence) for pr in prs if pr["state"] == "open"
-  ]
-  return run_parallel(targets, lambda target: finish_pending(api, repository, *target))
+  return prs
 
 
-def check_pr(api, repository, number, bots, registered=None):
-  if registered is None:
+def prepare_targets(api, repository, number=None, all_open=False, recover=None):
+  """Enumerate trusted metadata for an Actions matrix, without publishing Checks."""
+  if recover:
+    prs = recovery_targets(api, repository, recover)
+  elif all_open:
+    prs = api.pages(f"/repos/{repository}/pulls?state=open")
+  else:
+    prs = [api.request("GET", f"/repos/{repository}/pulls/{number}")]
+  targets = {
+    pr["number"]: {"number": pr["number"], "head": pr["head"]["sha"]}
+    for pr in prs
+    if pr["state"] == "open"
+  }
+  if len(targets) > 256:
+    raise ValueError("Actions matrix supports at most 256 open PRs per sweep")
+  return [targets[number] for number in sorted(targets)]
+
+
+def check_pr(api, repository, number, bots, head=None):
+  try:
     pr = api.request("GET", f"/repos/{repository}/pulls/{number}")
     if pr["state"] != "open":
       return True
     head = pr["head"]["sha"]
-    check = register_check(api, repository, number, head)
-  else:
-    head, check = registered
+  except Exception:
+    # A trusted routing snapshot lets registration revoke old success even if
+    # this metadata read fails. The evaluation must still obtain live PR data.
+    if head is None:
+      raise
+  check = register_check(api, repository, number, head)
+  if check is None:
+    return True
 
   @cache
   def authorized(login, author):
@@ -673,13 +676,22 @@ def main():
     "--cleanup-file", help="Finish interrupted Checks from a trusted local journal"
   )
   target.add_argument(
-    "--recover-run", type=int, help="Recover an interrupted caller run"
+    "--recover-run", type=int, help="Route an interrupted caller run to PR workers"
+  )
+  parser.add_argument(
+    "--prepare-targets",
+    action="store_true",
+    help="Output the worker matrix; never write Checks",
+  )
+  parser.add_argument(
+    "--head-sha",
+    help="Trusted head from the routing job; register before reading PR data",
   )
   parser.add_argument("--bots", default=os.environ.get("AI_REVIEW_BOTS", ""))
   args = parser.parse_args()
   bots = {bot.strip().lower() for bot in args.bots.split(",") if bot.strip()}
   token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-  evaluating = not (args.cleanup_file or args.recover_run)
+  evaluating = not (args.cleanup_file or args.prepare_targets)
   if (
     (
       evaluating
@@ -692,6 +704,12 @@ def main():
     or not re.fullmatch(r"[\w.-]+/[\w.-]+", args.repository)
     or (args.pr_number is not None and args.pr_number <= 0)
     or (args.recover_run is not None and args.recover_run <= 0)
+    or ((args.recover_run or args.all_open_prs) and not args.prepare_targets)
+    or (args.prepare_targets and args.cleanup_file)
+    or (
+      args.head_sha is not None
+      and (not args.pr_number or not re.fullmatch(r"[0-9a-f]{40}", args.head_sha))
+    )
     or not token
   ):
     parser.error(
@@ -700,33 +718,20 @@ def main():
   api = GitHub(token)
   if args.cleanup_file:
     return 0 if cleanup_file(api, args.repository, args.cleanup_file) else 1
-  if args.recover_run:
-    return 0 if recover_run(api, args.repository, args.recover_run) else 1
-  if args.all_open_prs:
-    prs = {
-      pr["number"]: pr for pr in api.pages(f"/repos/{args.repository}/pulls?state=open")
-    }
-    registered = {}
-    ok = True
-    # Block every target before any expensive review/Issue/permission reads.
-    for number, pr in sorted(prs.items()):
-      try:
-        head = pr["head"]["sha"]
-        check = register_check(api, args.repository, number, head)
-        if current_check(api, args.repository, number, head, check):
-          registered[number] = (head, check)
-      except Exception as error:
-        print(
-          f"PR #{number}: check failed ({type(error).__name__}); rerun required.",
-          file=sys.stderr,
-        )
-        ok = False
-    evaluated = run_parallel(
-      registered,
-      lambda number: check_pr(api, args.repository, number, bots, registered[number]),
+  if args.prepare_targets:
+    targets = prepare_targets(
+      api, args.repository, args.pr_number, args.all_open_prs, args.recover_run
     )
-    return 0 if evaluated and ok else 1
-  ok = check_pr(api, args.repository, args.pr_number, bots)
+    matrix = json.dumps({"include": targets}, separators=(",", ":"))
+    print(matrix)
+    if os.environ.get("GITHUB_OUTPUT"):
+      with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+        stream.write(f"matrix={matrix}\nhas-targets={'true' if targets else 'false'}\n")
+    return 0
+  if args.head_sha:
+    ok = check_pr(api, args.repository, args.pr_number, bots, args.head_sha)
+  else:
+    ok = check_pr(api, args.repository, args.pr_number, bots)
   return 0 if ok else 1
 
 

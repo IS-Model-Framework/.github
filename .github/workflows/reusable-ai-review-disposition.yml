@@ -18,7 +18,7 @@ on:
         type: boolean
         default: false
       recover-run-id:
-        description: 'Interrupted caller run to recover; uses that run generation'
+        description: 'Interrupted caller run whose PRs need a fresh evaluation'
         required: false
         type: number
         default: 0
@@ -36,14 +36,60 @@ permissions:
   checks: write
 
 jobs:
-  disposition:
-    name: Evaluate AI Review Dispositions
+  targets:
+    name: Route AI Review Dispositions
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ (inputs.all-open-prs || inputs.recover-run-id != 0) && 360 || 15 }}
-    # Sweeps must make progress; generation checks still reject older results.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.route.outputs.matrix }}
+      has-targets: ${{ steps.route.outputs.has-targets }}
+    steps:
+    - name: Checkout trusted shared scripts
+      uses: actions/checkout@v4
+      with:
+        repository: IS-Model-Framework/.github
+        ref: ${{ inputs.shared-ref }}
+        path: .ci-shared
+        persist-credentials: false
+        sparse-checkout: scripts
+    - uses: actions/setup-python@v7
+      with:
+        python-version: '3.11'
+    - name: Route to per-PR workers without writing Checks
+      id: route
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        ALL_OPEN_PRS: ${{ inputs.all-open-prs }}
+        RECOVER_RUN_ID: ${{ inputs.recover-run-id }}
+      run: |
+        if [[ "$RECOVER_RUN_ID" != "0" ]]; then
+          python .ci-shared/scripts/check_ai_review_disposition.py --prepare-targets --recover-run "$RECOVER_RUN_ID"
+        elif [[ "$ALL_OPEN_PRS" == "true" ]]; then
+          python .ci-shared/scripts/check_ai_review_disposition.py --prepare-targets --all-open-prs
+        else
+          python .ci-shared/scripts/check_ai_review_disposition.py --prepare-targets --pr-number "$PR_NUMBER"
+        fi
+
+  disposition:
+    name: Evaluate AI Review Dispositions (${{ matrix.number }})
+    needs: targets
+    if: ${{ needs.targets.outputs.has-targets == 'true' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Single checks, sweeps and recovery all acquire the same per-PR writer slot.
+    # Keep the active writer; newer pending work coalesces duplicate events.
     concurrency:
-      group: ai-review-disposition-${{ github.repository }}-${{ inputs.recover-run-id && format('recover-{0}', inputs.recover-run-id) || (inputs.all-open-prs && 'all-open-prs' || inputs.pr-number) }}
-      cancel-in-progress: ${{ !inputs.all-open-prs && inputs.recover-run-id == 0 }}
+      group: ai-review-disposition-${{ github.repository }}-${{ matrix.number }}
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
       AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
@@ -64,22 +110,12 @@ jobs:
 
     - name: Publish check on the target PR head commit
       env:
-        GH_TOKEN: ${{ github.token }}
-        AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
-        PR_NUMBER: ${{ inputs.pr-number }}
-        ALL_OPEN_PRS: ${{ inputs.all-open-prs }}
-        RECOVER_RUN_ID: ${{ inputs.recover-run-id }}
+        PR_NUMBER: ${{ matrix.number }}
+        HEAD_SHA: ${{ matrix.head }}
         AI_REVIEW_CHECKS_FILE: ${{ runner.temp }}/ai-review-checks.jsonl
-      run: |
-        if [[ "$RECOVER_RUN_ID" != "0" ]]; then
-          python .ci-shared/scripts/check_ai_review_disposition.py --recover-run "$RECOVER_RUN_ID"
-        elif [[ "$ALL_OPEN_PRS" == "true" ]]; then
-          python .ci-shared/scripts/check_ai_review_disposition.py --all-open-prs
-        else
-          python .ci-shared/scripts/check_ai_review_disposition.py --pr-number "$PR_NUMBER"
-        fi
+      run: python .ci-shared/scripts/check_ai_review_disposition.py --pr-number "$PR_NUMBER" --head-sha "$HEAD_SHA"
 
-    - name: Close interrupted checks registered by this job
+    - name: Close interrupted checks before releasing the writer slot
       if: ${{ always() && hashFiles('.ci-shared/scripts/check_ai_review_disposition.py') != '' }}
       env:
         AI_REVIEW_CHECKS_FILE: ${{ runner.temp }}/ai-review-checks.jsonl

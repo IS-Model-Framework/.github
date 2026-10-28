@@ -261,65 +261,60 @@ class RecoveryTests(unittest.TestCase):
     self.environment.start()
     self.addCleanup(self.environment.stop)
 
-  def test_first_metadata_read_failure_is_fenced_by_default_branch_recovery(self):
+  def test_first_metadata_read_failure_revokes_old_success_using_trusted_head(self):
     api = RecoveryStore()
     old = api.add(1)
     api.checks[old["id"]].update(status="completed", conclusion="success")
-    with (
-      patch.object(api, "request", side_effect=RuntimeError("read failed")),
-      self.assertRaises(RuntimeError),
-    ):
-      checker.check_pr(api, "org/repo", 128, {fixtures.BOT})
-    self.assertTrue(checker.recover_run(api, "org/repo", 999))
-    self.assertEqual(len(api.gate()), 1)
-    self.assertEqual(api.gate()[0]["conclusion"], "failure")
-    self.assertEqual(api.gate()[0]["external_id"], "ai-review-disposition:128:2:1")
+    request = api.request
 
-  def test_timeout_fences_late_success_with_a_different_check_id(self):
+    def fail_metadata(method, path, body=None):
+      if "/pulls/" in path:
+        raise RuntimeError("read failed")
+      return request(method, path, body)
+
+    with (
+      patch.object(api, "request", side_effect=fail_metadata),
+      patch.object(checker, "snapshot", side_effect=RuntimeError("read failed")),
+      patch.dict(os.environ, {"GITHUB_RUN_ID": "2", "GITHUB_RUN_ATTEMPT": "1"}),
+      patch("builtins.print"),
+    ):
+      self.assertFalse(
+        checker.check_pr(api, "org/repo", 128, {fixtures.BOT}, fixtures.HEAD)
+      )
+    self.assertEqual(len(api.checks), 1)
+    self.assertEqual(api.gate()[0]["conclusion"], "failure")
+
+  def test_cleanup_marks_same_check_failed_without_new_history(self):
     api = RecoveryStore()
     old = api.add(2)
     self.assertTrue(checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1)))
-    api.request(
-      "PATCH",
-      f"/repos/org/repo/check-runs/{old['id']}",
-      {"status": "completed", "conclusion": "success"},
-    )
-    self.assertNotEqual(api.gate()[0]["id"], old["id"])
+    self.assertEqual(len(api.checks), 1)
+    self.assertEqual(api.gate()[0]["id"], old["id"])
     self.assertEqual(api.gate()[0]["conclusion"], "failure")
-
-  def test_old_recovery_cannot_replace_newer_success_or_pending(self):
-    for status in ("completed", "in_progress"):
-      with self.subTest(status=status):
-        api = RecoveryStore()
-        newest = api.add(3)
-        api.checks[newest["id"]].update(
-          status=status, conclusion="success" if status == "completed" else None
-        )
-        checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1))
-        self.assertEqual([c["id"] for c in api.gate()], [newest["id"]])
-        self.assertEqual(api.gate()[0]["status"], status)
-
-  def test_completed_target_is_preserved_and_recovery_is_idempotent(self):
-    api = RecoveryStore()
-    own = api.add(2)
-    api.checks[own["id"]].update(status="completed", conclusion="success")
     before = copy.deepcopy(api.checks)
-    checker.recover_run(api, "org/repo", 999)
+    checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1))
     self.assertEqual(api.checks, before)
-    api.checks[own["id"]]["status"] = "in_progress"
-    checker.recover_run(api, "org/repo", 999)
-    count = len(api.checks)
-    checker.recover_run(api, "org/repo", 999)
-    self.assertEqual(len(api.checks), count)
 
-  def test_recovery_uses_source_attempt_not_its_own_workflow_generation(self):
+  def test_old_cleanup_cannot_replace_newer_success_or_pending(self):
+    for status in ("completed", "in_progress"):
+      api = RecoveryStore()
+      newest = api.add(3)
+      api.checks[newest["id"]].update(
+        status=status, conclusion="success" if status == "completed" else None
+      )
+      before = copy.deepcopy(api.checks)
+      checker.finish_pending(api, "org/repo", 128, fixtures.HEAD, (2, 1))
+      self.assertEqual(api.checks, before)
+
+  def test_recovery_routes_to_workers_without_writing_checks(self):
     api = RecoveryStore()
-    api.source["run_attempt"] = 2
-    with patch.dict(
-      os.environ, {"GITHUB_RUN_NUMBER": "999", "GITHUB_RUN_ATTEMPT": "7"}
-    ):
-      checker.recover_run(api, "org/repo", 999)
-    self.assertEqual(api.gate()[0]["external_id"], "ai-review-disposition:128:2:2")
+    api.add(1)
+    before = copy.deepcopy(api.checks)
+    self.assertEqual(
+      checker.prepare_targets(api, "org/repo", recover=999),
+      [{"number": 128, "head": fixtures.HEAD}],
+    )
+    self.assertEqual(api.checks, before)
 
   def test_recovery_rejects_unrelated_workflows_and_invalid_routing(self):
     for field, value in (
@@ -329,51 +324,54 @@ class RecoveryTests(unittest.TestCase):
       api = RecoveryStore()
       api.source[field] = value
       with self.subTest(field=field), self.assertRaises(ValueError):
-        checker.recover_run(api, "org/repo", 999)
+        checker.recovery_targets(api, "org/repo", 999)
       self.assertEqual(api.checks, {})
 
-  def test_running_rerun_or_success_is_not_marked_failed(self):
+  def test_running_rerun_or_success_routes_no_recovery(self):
     for changes in ({"status": "in_progress"}, {"conclusion": "success"}):
       api = RecoveryStore()
       api.source.update(changes)
-      self.assertTrue(checker.recover_run(api, "org/repo", 999))
+      self.assertEqual(checker.recovery_targets(api, "org/repo", 999), [])
       self.assertEqual(api.checks, {})
 
-  def test_recovery_is_not_blocked_by_invalid_bot_configuration(self):
+  def test_routing_does_not_need_bot_configuration(self):
     with (
       patch.dict(
-        os.environ, {"GH_TOKEN": "test-token", "AI_REVIEW_BOTS": "invalid+bot"}
+        os.environ,
+        {
+          "GH_TOKEN": "test-token",
+          "AI_REVIEW_BOTS": "invalid+bot",
+          "GITHUB_OUTPUT": "",
+        },
       ),
       patch.object(
-        sys, "argv", ["checker", "--repository", "org/repo", "--recover-run", "999"]
+        sys,
+        "argv",
+        [
+          "checker",
+          "--repository",
+          "org/repo",
+          "--prepare-targets",
+          "--recover-run",
+          "999",
+        ],
       ),
-      patch.object(checker, "recover_run", return_value=True) as recover,
+      patch.object(checker, "prepare_targets", return_value=[]) as route,
+      patch("builtins.print"),
     ):
       self.assertEqual(checker.main(), 0)
-    self.assertEqual(recover.call_args.args[1:], ("org/repo", 999))
+    self.assertEqual(route.call_args.args[1:], ("org/repo", None, False, 999))
 
-  def test_sweep_recovery_visits_all_targets_and_preserves_completed_results(self):
+  def test_sweep_recovery_routes_all_open_targets(self):
     api = RecoveryStore()
     api.source["display_title"] = "all-open-prs"
     prs = [
       {"number": n, "head": {"sha": fixtures.HEAD}, "state": "open"}
       for n in range(1, 5)
     ]
-    visited = []
-
-    def finish(client, repository, number, head, sequence):
-      visited.append(number)
-      if number == 1:
-        raise RuntimeError("one target is unreadable")
-      return True
-
-    with (
-      patch.object(api, "pages", return_value=prs),
-      patch.object(checker, "finish_pending", side_effect=finish),
-      patch("sys.stderr", new_callable=io.StringIO),
-    ):
-      self.assertFalse(checker.recover_run(api, "org/repo", 999))
-    self.assertEqual(sorted(visited), [1, 2, 3, 4])
+    with patch.object(api, "pages", return_value=prs):
+      self.assertEqual(len(checker.prepare_targets(api, "org/repo", recover=999)), 4)
+    self.assertEqual(api.checks, {})
 
   def test_local_journal_cleanup_closes_interrupted_checks(self):
     api = RecoveryStore()
@@ -418,45 +416,52 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("dispatch", stderr.getvalue())
       self.assertEqual(api.gate()[0]["status"], "in_progress")
 
-  def test_sweep_registers_every_pr_before_evaluation(self):
-    prs = [{"number": n, "head": {"sha": fixtures.HEAD}} for n in range(1, 9)]
-    registered = []
-    evaluated = []
+  def test_routing_outputs_matrix_for_worker_queue_without_check_writes(self):
+    api = RecoveryStore()
+    with tempfile.TemporaryDirectory() as directory:
+      output = Path(directory) / "outputs"
+      with (
+        patch.dict(
+          os.environ, {"GH_TOKEN": "test-token", "GITHUB_OUTPUT": str(output)}
+        ),
+        patch.object(
+          sys,
+          "argv",
+          [
+            "checker",
+            "--repository",
+            "org/repo",
+            "--prepare-targets",
+            "--pr-number",
+            "128",
+          ],
+        ),
+        patch.object(checker, "GitHub", return_value=api),
+        patch("builtins.print"),
+      ):
+        self.assertEqual(checker.main(), 0)
+      self.assertIn('"include":[{"number":128,"head":', output.read_text())
+      self.assertIn("has-targets=true", output.read_text())
+    self.assertEqual(api.checks, {})
 
-    def register(api, repository, number, head):
-      registered.append(number)
-      return {"id": number}
-
-    def evaluate(api, repository, number, bots, prepared):
-      self.assertEqual(len(registered), 8)
-      self.assertEqual(prepared, (fixtures.HEAD, {"id": number}))
-      evaluated.append(number)
-      if number == 2:
-        raise RuntimeError("one PR fails")
-      return True
-
-    with (
-      patch.dict(os.environ, {"GH_TOKEN": "test-token"}),
-      patch.object(
-        sys,
-        "argv",
-        [
-          "checker",
-          "--repository",
-          "org/repo",
-          "--bots",
-          fixtures.BOT,
-          "--all-open-prs",
-        ],
-      ),
-      patch.object(checker.GitHub, "pages", return_value=prs),
-      patch.object(checker, "register_check", side_effect=register),
-      patch.object(checker, "current_check", return_value=True),
-      patch.object(checker, "check_pr", side_effect=evaluate),
-      patch("sys.stderr", new_callable=io.StringIO),
-    ):
-      self.assertEqual(checker.main(), 1)
-    self.assertEqual(sorted(evaluated), list(range(1, 9)))
+  def test_shared_workflow_uses_one_worker_queue_for_all_entry_points(self):
+    workflow = (
+      Path(__file__).resolve().parents[2]
+      / ".github/workflows/reusable-ai-review-disposition.yml"
+    ).read_text()
+    self.assertIn(
+      "group: ai-review-disposition-${{ github.repository }}-${{ matrix.number }}",
+      workflow,
+    )
+    self.assertIn("cancel-in-progress: false", workflow)
+    self.assertIn("fail-fast: false", workflow)
+    self.assertIn("max-parallel: 4", workflow)
+    self.assertIn("--prepare-targets --all-open-prs", workflow)
+    self.assertIn("--prepare-targets --recover-run", workflow)
+    self.assertNotIn(
+      '--recover-run "$RECOVER_RUN_ID"\n        elif',
+      workflow.split("  disposition:")[1],
+    )
 
 
 if __name__ == "__main__":
