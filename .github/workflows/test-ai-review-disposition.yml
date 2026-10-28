@@ -1,26 +1,95 @@
-name: Test AI Review Disposition
-
+name: Sandbox Single Status API Probe
 on:
   pull_request:
-    paths:
-    - 'scripts/**'
-    - 'docs/examples/ai-review*.yml'
-    - '.github/workflows/*ai-review*.yml'
-  workflow_dispatch:
-
+    types: [opened, synchronize, reopened]
 permissions:
   contents: read
-
+  pull-requests: read
+  statuses: write
 jobs:
-  test:
+  verify:
+    name: Verify isolated status lifecycle
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
     - uses: actions/checkout@v4
       with:
+        ref: e25288f0fb578c02a9f2fae22192a8896440b11b
         persist-credentials: false
     - uses: actions/setup-python@v7
       with:
         python-version: '3.11'
     - name: Run unit tests
-      run: python -m unittest discover -s scripts/tests -v
+      run: python -m unittest discover -s scripts/tests -q
+    - name: Verify repeated status transitions on the isolated draft PR
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TARGET_PR: "25"
+        TARGET_SHA: f5633d347bb28356cd8775706d339758e1c40010
+        CANDIDATE: e25288f0fb578c02a9f2fae22192a8896440b11b
+      run: |
+        python -u - <<'PY'
+        import json
+        import os
+        import time
+        from pathlib import Path
+        from scripts.check_ai_review_disposition import (
+            GitHub, CHECK_NAME, register_status, publish_status, latest_status,
+            finish_pending, generation,
+        )
+        repo = os.environ['GITHUB_REPOSITORY']
+        assert repo == 'IS-Model-Framework/.github'
+        number = int(os.environ['TARGET_PR'])
+        api = GitHub(os.environ['GH_TOKEN'])
+        pr = api.request('GET', f'/repos/{repo}/pulls/{number}')
+        assert pr['draft'] and pr['head']['ref'].startswith('test/ai-disposition-row-target-')
+        head = pr['head']['sha']
+        assert head == os.environ['TARGET_SHA']
+        assert head != os.environ['GITHUB_SHA']
+        facts = []
+        for round_number, terminal in enumerate(('success', 'failure', 'interrupted', 'success'), 1):
+            pending = register_status(api, repo, number, head)
+            assert pending['state'] == 'pending'
+            current = latest_status(api, repo, head)
+            assert current['id'] == pending['id'] and current['state'] == 'pending'
+            finish_pending(api, repo, number, head, (generation()[0] - 1, 1))
+            assert latest_status(api, repo, head)['id'] == pending['id']
+            facts.append({'round': round_number, 'phase': 'start', 'state': current['state'], 'status_id': current['id']})
+            print(json.dumps(facts[-1]), flush=True)
+            time.sleep(5)
+            if terminal == 'interrupted':
+                finish_pending(api, repo, number, head, generation())
+                expected = 'failure'
+            else:
+                publish_status(api, repo, number, head, terminal, 'SANDBOX API lifecycle: ' + terminal, pending)
+                expected = terminal
+            combined = api.pages(f'/repos/{repo}/commits/{head}/status', 'statuses')
+            gate = [item for item in combined if item['context'] == CHECK_NAME]
+            assert len(gate) == 1 and gate[0]['state'] == expected
+            facts.append({'round': round_number, 'phase': 'finish', 'state': expected, 'visible_contexts': len(gate), 'status_id': gate[0]['id']})
+            print(json.dumps(facts[-1]), flush=True)
+        checks = api.request('GET', f'/repos/{repo}/commits/{head}/check-runs?filter=all&per_page=100')
+        assert not checks['check_runs'], checks['check_runs']
+        query = 'query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on StatusContext{context state targetUrl} ... on CheckRun{name conclusion}}}}}}}}}}'
+        data = api.graphql(query, {'owner': 'IS-Model-Framework', 'name': '.github', 'number': number})
+        rollup = data['repository']['pullRequest']['commits']['nodes'][0]['commit']['statusCheckRollup']
+        contexts = rollup['contexts']['nodes']
+        assert len(contexts) == 1, contexts
+        assert contexts[0]['__typename'] == 'StatusContext' and contexts[0]['context'] == CHECK_NAME
+        assert contexts[0]['state'] == 'SUCCESS' and rollup['state'] == 'SUCCESS'
+        report = {'candidate': os.environ['CANDIDATE'], 'target_pr': number, 'target_head': head,
+                  'transitions': facts, 'final_rollup': rollup, 'native_checks_on_target': checks['total_count']}
+        path = Path(os.environ['RUNNER_TEMP']) / 'single-ai-disposition-status-proof.json'
+        path.write_text(json.dumps(report, indent=2), encoding='utf-8')
+        with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+            summary.write('# Single-row status API verification\n\nSANDBOX: lifecycle only; no real bot completion claimed.\n\n')
+            summary.write(f'Candidate: `{os.environ["CANDIDATE"]}`\n\n')
+            summary.write(f'Target: https://github.com/{repo}/pull/{number}/checks\n\n')
+            summary.write('Four rounds, eight state writes, one visible StatusContext, zero native target Checks.\n\n')
+            summary.write('```json\n' + json.dumps(report, indent=2) + '\n```\n')
+        print(json.dumps({'result': 'passed', 'target_pr': number, 'visible_contexts': len(contexts), 'native_checks': checks['total_count']}), flush=True)
+        PY
+    - uses: actions/upload-artifact@v4
+      with:
+        name: single-ai-disposition-status-proof
+        path: ${{ runner.temp }}/single-ai-disposition-status-proof.json
