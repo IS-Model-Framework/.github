@@ -402,11 +402,18 @@ def summary(number, head, result):
 
 
 def latest_status(api, repository, head):
-  """The combined endpoint returns one latest status per context, not its history."""
-  statuses = api.pages(f"/repos/{repository}/commits/{head}/status", "statuses")
-  return next(
-    (item for item in statuses if item["context"].lower() == CHECK_NAME.lower()), None
-  )
+  """Read newest-first statuses, stopping at our context; combined omits creator."""
+  page = 1
+  while True:
+    statuses = api.request(
+      "GET", f"/repos/{repository}/commits/{head}/statuses?per_page=100&page={page}"
+    )
+    for status in statuses:
+      if status["context"].lower() == CHECK_NAME.lower():
+        return status
+    if len(statuses) < 100:
+      return None
+    page += 1
 
 
 def status_identity(status, repository):

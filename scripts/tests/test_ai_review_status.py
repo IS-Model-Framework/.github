@@ -167,13 +167,28 @@ class StatusPollingTests(unittest.TestCase):
     with self.assertRaises(ValueError):
       checker.status_identity(status, "org/repo")
 
-  def test_combined_context_read_paginates_without_scanning_status_history(self):
+  def test_status_lookup_paginates_past_other_contexts(self):
     self.api.add(1)
     for n in range(101):
       self.api.add(2, context=f"other-{n}")
     self.assertEqual(
       checker.latest_status(self.api, "org/repo", fixtures.HEAD)["id"], 1
     )
+
+  def test_ownership_uses_full_status_records_when_combined_omits_creator(self):
+    self.api.add(1, state="success")
+    self.assertNotIn("creator", self.api.gate()[0])
+    status = checker.latest_status(self.api, "org/repo", fixtures.HEAD)
+    self.assertEqual(status["creator"]["login"], "github-actions[bot]")
+    self.assertEqual(checker.status_identity(status, "org/repo")[:3], (1, 1, 128))
+
+  def test_latest_context_stops_before_reading_older_history_pages(self):
+    for n in range(150):
+      self.api.add(n)
+    with patch.object(self.api, "request", wraps=self.api.request) as request:
+      status = checker.latest_status(self.api, "org/repo", fixtures.HEAD)
+    self.assertEqual(status["id"], 150)
+    self.assertEqual(request.call_count, 1)
 
 
 class SingleRowWorkflowTests(unittest.TestCase):

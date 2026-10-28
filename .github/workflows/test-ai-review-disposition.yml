@@ -14,7 +14,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        ref: e25288f0fb578c02a9f2fae22192a8896440b11b
+        ref: 74a428e5f87d732b5e8c509e14985e6feebe0692
         persist-credentials: false
     - uses: actions/setup-python@v7
       with:
@@ -26,7 +26,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         TARGET_PR: "25"
         TARGET_SHA: f5633d347bb28356cd8775706d339758e1c40010
-        CANDIDATE: e25288f0fb578c02a9f2fae22192a8896440b11b
+        CANDIDATE: 74a428e5f87d732b5e8c509e14985e6feebe0692
       run: |
         python -u - <<'PY'
         import json
