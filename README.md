@@ -201,6 +201,10 @@ pytest --cov=. --cov-report=xml:coverage.xml --cov-report=term-missing \
 
 默认测试发现范围由项目 pytest 配置决定。生成 `coverage.xml` 和 `pytest.xml`，在 PR 上评论覆盖率并上传 Codecov。评论和上传步骤未使用 `always()`，测试失败时不会继续执行它们。
 
+完整 CI 和 tests 子工作流均接受 `coverage-summary-only: true`（默认 `false`），
+用于在覆盖率评论接近 GitHub 的 65,536 字符限制时隐藏逐文件明细，保留汇总。
+该选项只改变评论展示，不改变测试范围、覆盖率采集、完整 XML 报告、依赖测试 artifact 或 Codecov 上传。
+
 完整 CI 和 tests 子工作流均接受可选的 `pytest-runner`，默认 `''`。
 配置了入口的 PR 显示 **PR Tests (Dependency-Aware)**；push、其他事件或未配置入口的 PR 显示 **Comprehensive Tests**。
 例如传入 `tools/run_unit_tests.py` 后，PR 运行 `python -- <runner> <原有 pytest 参数>`
