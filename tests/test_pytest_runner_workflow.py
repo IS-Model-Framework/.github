@@ -32,6 +32,40 @@ def test_complete_ci_forwards_pytest_runner_to_tests_workflow():
   tests_job = document["jobs"]["tests"]
   assert tests_job["uses"] == "./.github/workflows/reusable-tests.yml"
   assert tests_job["with"]["pytest-runner"] == "${{ inputs.pytest-runner }}"
+  assert (
+    tests_job["with"]["coverage-summary-only"] == "${{ inputs.coverage-summary-only }}"
+  )
+
+
+@pytest.mark.parametrize("workflow", ["reusable-python-ci.yml", "reusable-tests.yml"])
+def test_coverage_summary_is_opt_in(workflow):
+  document = yaml.load(
+    (ROOT / ".github/workflows" / workflow).read_text(), Loader=yaml.BaseLoader
+  )
+  summary_input = document["on"]["workflow_call"]["inputs"]["coverage-summary-only"]
+  assert summary_input["type"] == "boolean"
+  assert summary_input["required"] == "false"
+  assert summary_input["default"] == "false"
+
+
+def test_coverage_summary_preserves_full_reports():
+  document = yaml.load(
+    (ROOT / ".github/workflows/reusable-tests.yml").read_text(), Loader=yaml.BaseLoader
+  )
+  steps = document["jobs"]["comprehensive-tests"]["steps"]
+  comment = next(step for step in steps if step["name"] == "Pytest coverage comment")
+  assert comment["with"]["hide-report"] == "${{ inputs.coverage-summary-only }}"
+  assert comment["with"]["pytest-xml-coverage-path"] == "./coverage.xml"
+  assert comment["with"]["junitxml-path"] == "./pytest.xml"
+  assert (
+    comment["if"]
+    == "${{ inputs.comment-on-pr && github.event_name == 'pull_request' }}"
+  )
+  artifact = next(step for step in steps if step["name"] == "Save dependency test plan")
+  assert "coverage.xml" in artifact["with"]["path"].splitlines()
+  assert "pytest.xml" in artifact["with"]["path"].splitlines()
+  upload = next(step for step in steps if step["name"] == "Upload coverage")
+  assert upload["with"]["file"] == "./coverage.xml"
 
 
 def load_test_step():

@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: ''
+      coverage-summary-only:
+        description: 'Keep PR coverage comments concise by hiding the per-file report'
+        required: false
+        type: boolean
+        default: false
       python-version:
         description: 'Python version to use'
         required: false
@@ -118,6 +123,7 @@ jobs:
     uses: ./.github/workflows/reusable-tests.yml
     with:
       pytest-runner: ${{ inputs.pytest-runner }}
+      coverage-summary-only: ${{ inputs.coverage-summary-only }}
       python-version: ${{ inputs.python-version || '3.11' }}
       install-command: ${{ inputs.test-install-command || inputs.install-command || 'pip install -e ".[dev]"' }}
     secrets:
