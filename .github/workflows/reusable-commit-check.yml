@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: '3.11'
+      submodules:
+        description: 'Whether to recursively checkout project submodules'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   check-commit-logs:
@@ -20,7 +25,7 @@ jobs:
       with:
         fetch-depth: 0
         repository: ${{ github.repository }}
-        submodules: recursive
+        submodules: ${{ inputs.submodules && 'recursive' || 'false' }}
     
     - name: Checkout shared CI scripts
       uses: actions/checkout@v4

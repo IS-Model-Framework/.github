@@ -46,6 +46,7 @@ jobs:
         fetch-depth: 0
         repository: ${{ github.repository }}
         submodules: recursive
+        token: ${{ secrets.proton_samples_token || github.token }}
         persist-credentials: false
     
     - name: Set up Python

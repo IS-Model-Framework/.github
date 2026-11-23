@@ -114,7 +114,7 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 
 完整 CI 使用 `||` 回退默认值，大小阈值传入 `0` 时也会回退到默认值。警告阈值必须小于阻断阈值。
 
-可选 secret `proton_samples_token` 会传给测试工作流，仅在测试依赖安装步骤中为以下组织仓库的 HTTPS Git URL 设置认证：`ProtonSamples`、`PallasKernels`、`ProtonFramework`、`Pallas_training`。它不用于 checkout、格式或类型检查中的依赖安装。需要时在调用 job 中显式传递：
+可选 secret `proton_samples_token` 会传给测试工作流，用于主仓库和递归子模块的 checkout，并在测试依赖安装步骤中为以下组织仓库的 HTTPS Git URL 设置认证：`ProtonSamples`、`PallasKernels`、`ProtonFramework`、`Pallas_training`。该 token 需具有调用仓库和子模块仓库的读取权限；未传入时，checkout 使用 `github.token`。它不用于格式或类型检查中的依赖安装。需要时在调用 job 中显式传递：
 
 ```yaml
     secrets:
@@ -131,6 +131,7 @@ jobs:
     uses: IS-Model-Framework/.github/.github/workflows/reusable-precommit.yml@main
     with:
       precommit-config-path: '.pre-commit-config.yaml'
+      submodules: false
 
   tests:
     needs: pre-commit
@@ -142,6 +143,8 @@ jobs:
 ```
 
 各子工作流均接受 `python-version`（默认 `'3.11'`），其余参数如下：
+
+precommit、commit-check、format-check、type-check 和 pr-size-check 还共同接受 boolean 类型的 `submodules`，默认 `true`，保持递归拉取子模块。传入 `submodules: false` 时只 checkout 主仓库；格式、类型检查的安装命令也需保证无需子模块即可执行。该参数仅在这些静态子工作流暴露，完整 CI 的默认行为保持不变。
 
 | 子工作流 | 额外参数及默认值 |
 | --- | --- |
