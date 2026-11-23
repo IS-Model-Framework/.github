@@ -31,6 +31,9 @@ on:
     secrets:
       proton_samples_token:
         required: false
+      checkout-token:
+        description: 'Token for checking out the project and submodules; defaults to github.token'
+        required: false
 
 jobs:
   comprehensive-tests:
@@ -46,6 +49,7 @@ jobs:
         fetch-depth: 0
         repository: ${{ github.repository }}
         submodules: recursive
+        token: ${{ secrets.checkout-token || github.token }}
         persist-credentials: false
     
     - name: Set up Python

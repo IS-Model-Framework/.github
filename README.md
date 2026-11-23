@@ -131,6 +131,7 @@ jobs:
     uses: IS-Model-Framework/.github/.github/workflows/reusable-precommit.yml@main
     with:
       precommit-config-path: '.pre-commit-config.yaml'
+      submodules: false
 
   tests:
     needs: pre-commit
@@ -143,16 +144,28 @@ jobs:
 
 各子工作流均接受 `python-version`（默认 `'3.11'`），其余参数如下：
 
+precommit、commit-check、format-check、type-check 和 pr-size-check 还共同接受 boolean 类型的 `submodules`，默认 `true`，保持递归拉取子模块。传入 `submodules: false` 时只 checkout 主仓库；格式、类型检查的安装命令也需保证无需子模块即可执行。该参数仅在这些静态子工作流暴露，完整 CI 的默认行为保持不变。
+
 | 子工作流 | 额外参数及默认值 |
 | --- | --- |
 | precommit | `precommit-config-path: ''` |
 | commit-check | 无 |
 | format-check | `ruff-config-path: ''`、`install-command: 'pip install -e ".[dev]"'` |
 | type-check | `install-command: 'pip install -e ".[dev]"'` |
-| tests | `pytest-runner: ''`、`install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token` |
+| tests | `pytest-runner: ''`、`install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token`、`checkout-token` |
 | pr-size-check | `warning-threshold: 200`、`block-threshold: 300` |
 
 `precommit-config-path`、`upload-coverage` 和 `comment-on-pr` 只在对应子工作流暴露，不能直接传给完整 CI。
+
+直接调用 tests 时，可通过可选 secret `checkout-token` 为主仓库和递归子模块 checkout 提供认证；该 token 需要拥有两者的读取权限。未传入时仍使用 `github.token`。它与仅用于依赖安装的 `proton_samples_token` 相互独立，可根据需要传入同一个 token：
+
+```yaml
+    secrets:
+      checkout-token: ${{ secrets.PROTON_SAMPLES_READ_TOKEN }}
+      proton_samples_token: ${{ secrets.PROTON_SAMPLES_READ_TOKEN }}
+```
+
+`checkout-token` 只在 tests 子工作流暴露，完整 CI 不转发该 secret。
 
 ## 检查规则与配置
 

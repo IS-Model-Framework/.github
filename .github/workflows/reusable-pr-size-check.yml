@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: '3.11'
+      submodules:
+        description: 'Whether to recursively checkout project submodules'
+        required: false
+        type: boolean
+        default: true
       warning-threshold:
         description: 'Warn when counted added lines are greater than this value'
         required: false
@@ -36,7 +41,7 @@ jobs:
       with:
         fetch-depth: 0
         repository: ${{ github.repository }}
-        submodules: recursive
+        submodules: ${{ inputs.submodules && 'recursive' || 'false' }}
 
     - name: Checkout shared CI scripts
       if: ${{ github.event_name == 'pull_request' }}

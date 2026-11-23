@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: '3.11'
+      submodules:
+        description: 'Whether to recursively checkout project submodules'
+        required: false
+        type: boolean
+        default: true
       ruff-config-path:
         description: 'Path to ruff config (relative to project root)'
         required: false
@@ -30,7 +35,7 @@ jobs:
       with:
         fetch-depth: 0
         repository: ${{ github.repository }}
-        submodules: recursive
+        submodules: ${{ inputs.submodules && 'recursive' || 'false' }}
 
     - name: Checkout shared CI scripts and configs
       uses: actions/checkout@v4
