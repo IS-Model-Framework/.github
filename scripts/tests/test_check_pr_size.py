@@ -69,11 +69,22 @@ class PrSizeTests(unittest.TestCase):
       "src/spec_helpers/helpers.rb",
       "src/specification.ts",
       "src/api_test_helpers.go",
-      "README.md",
+      "docs/design.markdown",
+      "src/readme.md.py",
       ".github/workflows/ci.yml",
     ):
       with self.subTest(path=path):
         self.assertEqual(is_excluded_file(path), (False, ""))
+
+  def test_markdown_files_are_excluded(self):
+    for path in (
+      "README.md",
+      "docs/design.md",
+      "src/README.MD",
+      "template/wiki.md",
+    ):
+      with self.subTest(path=path):
+        self.assertEqual(is_excluded_file(path), (True, "excluded pattern: *.md"))
 
   def test_existing_exclusions_are_preserved(self):
     for path in ("poetry.lock", "vendor/api.py", "app.min.js", "image.png"):
@@ -82,16 +93,17 @@ class PrSizeTests(unittest.TestCase):
 
   def test_thresholds_and_summary_only_use_counted_additions(self):
     for additions, status, passed in (
-      (300, "PASS", True),
-      (301, "WARNING", True),
-      (500, "WARNING", True),
-      (501, "BLOCK", False),
+      (200, "PASS", True),
+      (201, "WARNING", True),
+      (300, "WARNING", True),
+      (301, "BLOCK", False),
     ):
       with self.subTest(additions=additions):
         numstat = (
           f"{additions}\t10\tsrc/api.py\n"
           "1000\t0\ttests/test_api.py\n"
           "1000\t0\tsrc/api_test.py\n"
+          "1000\t0\tREADME.md\n"
         )
         output = io.StringIO()
         with (
@@ -99,14 +111,15 @@ class PrSizeTests(unittest.TestCase):
           patch("scripts.check_pr_size.write_step_summary") as write_summary,
           redirect_stdout(output),
         ):
-          self.assertEqual(check_pr_size("base", "head", 300, 500), passed)
+          self.assertEqual(check_pr_size("base", "head", 200, 300), passed)
         report = write_summary.call_args.args[0]
         self.assertIn(f"- Status: {status}", report)
         self.assertIn(f"- Counted added lines: {additions}\n", report)
-        self.assertIn("- Excluded added lines: 2000\n", report)
+        self.assertIn("- Excluded added lines: 3000\n", report)
         self.assertIn("- Counted files: 1", report)
-        self.assertIn("- Excluded files: 2", report)
+        self.assertIn("- Excluded files: 3", report)
         self.assertIn("`tests/test_api.py` (test directory: tests)", report)
+        self.assertIn("`README.md` (excluded pattern: *.md)", report)
 
   def test_excluded_additions_include_all_exclusion_types(self):
     excluded = parse_numstat(
@@ -115,10 +128,10 @@ class PrSizeTests(unittest.TestCase):
       "15\t0\tgenerated/api.py\n"
       "-\t-\timage.png\n"
     )
-    report = build_summary(0, [], excluded, 300, 500)
+    report = build_summary(0, [], excluded, 200, 300)
     self.assertIn("- Excluded added lines: 150\n", report)
     self.assertIn("- Status: PASS", report)
-    empty_report = build_summary(0, [], [], 300, 500)
+    empty_report = build_summary(0, [], [], 200, 300)
     self.assertIn("- Excluded added lines: 0\n", empty_report)
 
   def test_excluded_total_includes_files_beyond_display_limit(self):
@@ -126,7 +139,7 @@ class PrSizeTests(unittest.TestCase):
       FileChange(f"tests/test_{i}.py", i, True, "test directory: tests")
       for i in range(1, 26)
     ]
-    report = build_summary(0, [], excluded, 300, 500)
+    report = build_summary(0, [], excluded, 200, 300)
     self.assertIn("- Excluded added lines: 325\n", report)
     self.assertIn("...and 5 more", report)
 

@@ -12,12 +12,12 @@ on:
         description: 'Warn when counted added lines are greater than this value'
         required: false
         type: number
-        default: 300
+        default: 200
       block-threshold:
         description: 'Fail when counted added lines are greater than this value'
         required: false
         type: number
-        default: 500
+        default: 300
 
 jobs:
   pr-size-check:

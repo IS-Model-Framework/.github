@@ -45,6 +45,7 @@ EXCLUDED_PATTERNS = (
   "*.min.css",
   "*.min.js",
   "*.map",
+  "*.md",
 )
 
 TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "testdata"}
@@ -306,13 +307,13 @@ if __name__ == "__main__":
   parser.add_argument(
     "--warning-threshold",
     type=int,
-    default=300,
+    default=200,
     help="Warn when counted added lines are greater than this value.",
   )
   parser.add_argument(
     "--block-threshold",
     type=int,
-    default=500,
+    default=300,
     help="Fail when counted added lines are greater than this value.",
   )
 

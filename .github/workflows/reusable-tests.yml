@@ -3,6 +3,11 @@ name: Reusable - Tests
 on:
   workflow_call:
     inputs:
+      pytest-runner:
+        description: 'Optional repository Python runner for PR dependency tests'
+        required: false
+        type: string
+        default: ''
       python-version:
         description: 'Python version to use'
         required: false
@@ -23,19 +28,25 @@ on:
         required: false
         type: boolean
         default: true
-    secrets:
-      proton_samples_token:
-        required: false
       file-coverage-threshold:
-        description: 'Minimum coverage percentage required for each measured file'
+        description: 'Minimum line coverage for each added source file'
         required: false
         type: number
         default: 85
+    secrets:
+      proton_samples_token:
+        required: false
 
 jobs:
   comprehensive-tests:
     runs-on: ubuntu-latest
-    name: Comprehensive Tests
+    # A configured PR runner selects tests by dependency and may fall back to full pytest.
+    # The plan records the actual scope; push and unconfigured PRs run full pytest.
+    name: ${{ github.event_name == 'pull_request' && inputs.pytest-runner != '' && 'PR Tests (Dependency-Aware)' || 'Comprehensive Tests' }}
+    env:
+      CHECK_NEW_FILE_COVERAGE: >-
+        ${{ github.event_name == 'pull_request' &&
+            contains(fromJSON('["IS-Model-Framework/PallasKernels","IS-Model-Framework/ProtonSamples"]'), github.repository) }}
     
     steps:
     - name: Checkout code
@@ -47,13 +58,14 @@ jobs:
         persist-credentials: false
 
     - name: Checkout shared CI scripts
-      if: ${{ github.event_name == 'pull_request' }}
+      if: ${{ env.CHECK_NEW_FILE_COVERAGE == 'true' }}
       uses: actions/checkout@v4
       with:
-        repository: ${{ github.repository_owner }}/.github
+        repository: IS-Model-Framework/.github
+        ref: main
         path: .ci-shared
-        sparse-checkout: |
-          scripts
+        sparse-checkout: scripts
+        persist-credentials: false
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -76,21 +88,41 @@ jobs:
         python -m pip install --upgrade pip
         ${{ inputs.install-command }}
     
-    - name: Run all tests and generate reports
+    - name: Run tests and generate reports
       id: run-tests
+      env:
+        PYTEST_RUNNER: ${{ inputs.pytest-runner }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PYTEST_PLAN_PATH: ${{ runner.temp }}/unit-test-plan.json
       run: |
         export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-        # 
-        # 运行所有测试 (unit 和 integration)
-        # - 生成 pytest.xml 供 PR 评论使用
-        # - 生成 coverage.xml 供 Codecov 和 PR 评论使用
-        #
-        pytest \
-          --cov=. \
-          --cov-report=xml:coverage.xml \
-          --cov-report=term-missing \
-          --junitxml=pytest.xml \
+        pytest_args=(
+          --cov=.
+          --cov-report=xml:coverage.xml
+          --cov-report=term-missing
+          --junitxml=pytest.xml
           -v -s --tb=short
+        )
+        if [[ "$GITHUB_EVENT_NAME" == "pull_request" && -n "$PYTEST_RUNNER" && -f "$PYTEST_RUNNER" ]]; then
+          python -- "$PYTEST_RUNNER" "${pytest_args[@]}"
+        else
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" && -n "$PYTEST_RUNNER" ]]; then
+            echo "::warning::Pytest runner unavailable; running full pytest"
+          fi
+          pytest "${pytest_args[@]}"
+        fi
+
+    - name: Save dependency test plan
+      if: ${{ always() && github.event_name == 'pull_request' && inputs.pytest-runner != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: core-dependency-tests-${{ github.run_attempt }}
+        path: |
+          ${{ runner.temp }}/unit-test-plan.json
+          ${{ runner.temp }}/unit-test-selection-candidate.json
+          pytest.xml
+          coverage.xml
+        if-no-files-found: warn
     
     - name: Pytest coverage comment
       # 仅在 input 启用时，并且仅在 pull_request 事件上运行
@@ -107,9 +139,11 @@ jobs:
         file: ./coverage.xml
         fail_ci_if_error: false
 
-    - name: Check per-file coverage threshold
-      if: ${{ github.event_name == 'pull_request' }}
+    - name: Check added-file coverage
+      if: ${{ env.CHECK_NEW_FILE_COVERAGE == 'true' }}
+      env:
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
         python .ci-shared/scripts/check_file_coverage.py \
-          --coverage-file coverage.xml \
           --threshold ${{ inputs.file-coverage-threshold }}

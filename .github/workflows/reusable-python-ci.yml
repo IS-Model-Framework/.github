@@ -3,6 +3,11 @@ name: Reusable - Complete Python CI
 on:
   workflow_call:
     inputs:
+      pytest-runner:
+        description: 'Optional repository Python runner for PR dependency tests'
+        required: false
+        type: string
+        default: ''
       python-version:
         description: 'Python version to use'
         required: false
@@ -52,12 +57,12 @@ on:
         description: 'Warn when counted added lines are greater than this value'
         required: false
         type: number
-        default: 300
+        default: 200
       pr-size-block-threshold:
         description: 'Fail when counted added lines are greater than this value'
         required: false
         type: number
-        default: 500
+        default: 300
     secrets:
       proton_samples_token:
         required: false
@@ -68,8 +73,8 @@ jobs:
     uses: ./.github/workflows/reusable-pr-size-check.yml
     with:
       python-version: ${{ inputs.python-version || '3.11' }}
-      warning-threshold: ${{ inputs.pr-size-warning-threshold || 300 }}
-      block-threshold: ${{ inputs.pr-size-block-threshold || 500 }}
+      warning-threshold: ${{ inputs.pr-size-warning-threshold || 200 }}
+      block-threshold: ${{ inputs.pr-size-block-threshold || 300 }}
 
   pre-commit:
     uses: ./.github/workflows/reusable-precommit.yml
@@ -112,6 +117,7 @@ jobs:
           !contains(needs.*.result, 'cancelled') }}
     uses: ./.github/workflows/reusable-tests.yml
     with:
+      pytest-runner: ${{ inputs.pytest-runner }}
       python-version: ${{ inputs.python-version || '3.11' }}
       install-command: ${{ inputs.test-install-command || inputs.install-command || 'pip install -e ".[dev]"' }}
     secrets:
