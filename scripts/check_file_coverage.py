@@ -56,31 +56,16 @@ def main():
       total = len(statements)
       rows.append((path, total - len(missing), total))
 
-  failed = [
-    path
-    for path, covered, total in rows
-    if total and covered * 100 < args.threshold * total
-  ]
-  status = "SKIP" if not rows else ("FAIL" if failed else "PASS")
-  lines = [
-    "# Added-file coverage",
-    "",
-    f"- Status: {status}",
-    f"- Threshold: {args.threshold:g}%",
-    f"- Checked files: {len(rows)}",
-    f"- Files below threshold: {len(failed)}",
-    "",
-  ]
+  failed = False
   for path, covered, total in rows:
-    percent = covered * 100 / total if total else 100
-    lines.append(f"- `{path}`: {percent:.2f}% ({covered}/{total})")
-
-  summary = "\n".join(lines) + "\n"
-  print(summary)
-  if destination := os.environ.get("GITHUB_STEP_SUMMARY"):
-    with open(destination, "a", encoding="utf-8") as output:
-      output.write(summary)
-  return int(bool(failed))
+    if total and covered * 100 < args.threshold * total:
+      print(
+        f"{path}: {covered * 100 / total:.2f}% ({covered}/{total}), "
+        f"required {args.threshold:g}%",
+        file=sys.stderr,
+      )
+      failed = True
+  return int(failed)
 
 
 if __name__ == "__main__":
