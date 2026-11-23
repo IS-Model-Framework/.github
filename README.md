@@ -114,7 +114,7 @@ PR 大小检查不计入 `CI Result`，也不阻止测试启动。超过大小�
 
 完整 CI 使用 `||` 回退默认值，大小阈值传入 `0` 时也会回退到默认值。警告阈值必须小于阻断阈值。
 
-可选 secret `proton_samples_token` 会传给测试工作流，仅在测试依赖安装步骤中为以下组织仓库的 HTTPS Git URL 设置认证：`ProtonSamples`、`PallasKernels`、`ProtonFramework`、`Pallas_training`。它不用于 checkout、格式或类型检查中的依赖安装。需要时在调用 job 中显式传递：
+可选 secret `proton_samples_token` 会传给测试工作流，用于主仓库和递归子模块的 checkout，并在测试依赖安装步骤中为以下组织仓库的 HTTPS Git URL 设置认证：`ProtonSamples`、`PallasKernels`、`ProtonFramework`、`Pallas_training`。该 token 需具有调用仓库和子模块仓库的读取权限；未传入时，checkout 使用 `github.token`。它不用于格式或类型检查中的依赖安装。需要时在调用 job 中显式传递：
 
 ```yaml
     secrets:
@@ -152,20 +152,10 @@ precommit、commit-check、format-check、type-check 和 pr-size-check 还共同
 | commit-check | 无 |
 | format-check | `ruff-config-path: ''`、`install-command: 'pip install -e ".[dev]"'` |
 | type-check | `install-command: 'pip install -e ".[dev]"'` |
-| tests | `pytest-runner: ''`、`install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token`、`checkout-token` |
+| tests | `pytest-runner: ''`、`install-command: 'pip install -e ".[dev]"'`、`upload-coverage: true`、`comment-on-pr: true`；可选 secret `proton_samples_token` |
 | pr-size-check | `warning-threshold: 200`、`block-threshold: 300` |
 
 `precommit-config-path`、`upload-coverage` 和 `comment-on-pr` 只在对应子工作流暴露，不能直接传给完整 CI。
-
-直接调用 tests 时，可通过可选 secret `checkout-token` 为主仓库和递归子模块 checkout 提供认证；该 token 需要拥有两者的读取权限。未传入时仍使用 `github.token`。它与仅用于依赖安装的 `proton_samples_token` 相互独立，可根据需要传入同一个 token：
-
-```yaml
-    secrets:
-      checkout-token: ${{ secrets.PROTON_SAMPLES_READ_TOKEN }}
-      proton_samples_token: ${{ secrets.PROTON_SAMPLES_READ_TOKEN }}
-```
-
-`checkout-token` 只在 tests 子工作流暴露，完整 CI 不转发该 secret。
 
 ## 检查规则与配置
 
