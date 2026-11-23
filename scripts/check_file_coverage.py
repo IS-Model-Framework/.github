@@ -7,19 +7,9 @@ import sys
 from coverage import Coverage
 
 
-EXCLUDED = {
-  "IS-Model-Framework/PallasKernels": {
-    "tests",
-    "samples",
-    "third_party",
-    "benchmarks",
-    "scripts",
-  },
-  "IS-Model-Framework/ProtonSamples": {
-    "tests",
-    "samples",
-    "third_party",
-  },
+SOURCE_DIRECTORIES = {
+  "IS-Model-Framework/PallasKernels": {"jax_ops", "pallas_kernels", "tools"},
+  "IS-Model-Framework/ProtonSamples": {"proton_samples", "tools"},
 }
 
 
@@ -30,8 +20,8 @@ def main():
   if not 0 <= args.threshold <= 100:
     parser.error("--threshold must be between 0 and 100")
 
-  excluded = EXCLUDED.get(os.environ.get("GITHUB_REPOSITORY"))
-  if excluded is None:
+  included = SOURCE_DIRECTORIES.get(os.environ.get("GITHUB_REPOSITORY"))
+  if included is None:
     return 0
 
   base = os.environ["PR_BASE_SHA"]
@@ -51,7 +41,7 @@ def main():
     for name in added.split(b"\0")
     if name
     for path in [os.fsdecode(name)]
-    if path.endswith(".py") and path.split("/", 1)[0] not in excluded
+    if path.endswith(".py") and path.split("/", 1)[0] in included
   )
 
   rows = []
