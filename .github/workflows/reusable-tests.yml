@@ -28,6 +28,11 @@ on:
         required: false
         type: boolean
         default: true
+      file-coverage-threshold:
+        description: 'Minimum line coverage for each added source file'
+        required: false
+        type: number
+        default: 85
     secrets:
       proton_samples_token:
         required: false
@@ -38,6 +43,10 @@ jobs:
     # A configured PR runner selects tests by dependency and may fall back to full pytest.
     # The plan records the actual scope; push and unconfigured PRs run full pytest.
     name: ${{ github.event_name == 'pull_request' && inputs.pytest-runner != '' && 'PR Tests (Dependency-Aware)' || 'Comprehensive Tests' }}
+    env:
+      CHECK_NEW_FILE_COVERAGE: >-
+        ${{ github.event_name == 'pull_request' &&
+            contains(fromJSON('["IS-Model-Framework/PallasKernels","IS-Model-Framework/ProtonSamples"]'), github.repository) }}
     
     steps:
     - name: Checkout code
@@ -47,6 +56,16 @@ jobs:
         repository: ${{ github.repository }}
         submodules: recursive
         token: ${{ secrets.proton_samples_token || github.token }}
+        persist-credentials: false
+
+    - name: Checkout shared CI scripts
+      if: ${{ env.CHECK_NEW_FILE_COVERAGE == 'true' }}
+      uses: actions/checkout@v4
+      with:
+        repository: IS-Model-Framework/.github
+        ref: main
+        path: .ci-shared
+        sparse-checkout: scripts
         persist-credentials: false
     
     - name: Set up Python
@@ -120,3 +139,12 @@ jobs:
       with:
         file: ./coverage.xml
         fail_ci_if_error: false
+
+    - name: Check added-file coverage
+      if: ${{ env.CHECK_NEW_FILE_COVERAGE == 'true' }}
+      env:
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        python .ci-shared/scripts/check_file_coverage.py \
+          --threshold ${{ inputs.file-coverage-threshold }}
