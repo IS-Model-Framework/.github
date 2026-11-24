@@ -1,0 +1,59 @@
+# Copy to each project's .github/workflows/ai-review-disposition.yml.
+# Install on the default branch; remove the old AI Review Events collector.
+name: AI Review Disposition
+# Recovery reads this routing value if the run fails before publishing a status.
+run-name: >-
+  ${{ (github.event_name == 'issues' || github.event_name == 'schedule'
+       || github.event_name == 'workflow_run' || inputs.all-open-prs) && 'all-open-prs'
+      || (github.event_name == 'issue_comment' && github.event.issue.number)
+      || inputs.pr-number || '0' }}
+
+on:
+  # Reviews, inline replies and PR head changes are detected by background polls.
+  # Direct PR/review triggers would add native job Checks to the PR page.
+  schedule:
+    - cron: '3-58/5 * * * *'
+  workflow_run:
+    # Match the repository's EXISTING CI workflow name; do not add a collector.
+    workflows: [CI]
+    types: [completed]
+  issue_comment:
+    types: [created, edited, deleted]
+  issues:
+    types: [closed, reopened, deleted, transferred]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: 'Positive PR number; leave 0 when rechecking all open PRs'
+        required: false
+        type: number
+        default: 0
+      all-open-prs:
+        description: 'Explicitly recheck all open PRs'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  issues: read
+  statuses: write
+
+jobs:
+  disposition:
+    if: >-
+      ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+          && (github.event_name != 'issue_comment' || github.event.issue.pull_request) }}
+    uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
+    with:
+      all-open-prs: >-
+        ${{ contains(fromJSON('["issues","schedule","workflow_run"]'), github.event_name)
+            || (github.event_name == 'workflow_dispatch' && inputs.all-open-prs) }}
+      pr-number: >-
+        ${{ (github.event_name == 'issue_comment' && github.event.issue.number)
+            || fromJSON(inputs.pr-number || '0') }}
+      only-changed: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_run' }}
+      bot-logins: ${{ vars.AI_REVIEW_BOTS }}
+      shared-ref: main

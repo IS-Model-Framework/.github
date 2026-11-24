@@ -1,0 +1,101 @@
+name: Reusable - AI Review Disposition
+
+on:
+  workflow_call:
+    inputs:
+      bot-logins:
+        description: 'Comma-separated GitHub logins; every bot must complete review'
+        required: true
+        type: string
+      pr-number:
+        description: 'Positive PR number to check in the caller repository'
+        required: false
+        type: number
+        default: 0
+      all-open-prs:
+        description: 'Explicitly recheck every open PR'
+        required: false
+        type: boolean
+        default: false
+      recover-run-id:
+        description: 'Interrupted caller run whose PRs need a fresh evaluation'
+        required: false
+        type: number
+        default: 0
+      only-changed:
+        description: 'Poll live evidence without rewriting unchanged terminal results'
+        required: false
+        type: boolean
+        default: false
+      shared-ref:
+        description: 'Revision of the shared CI scripts; defaults to main'
+        required: false
+        type: string
+        default: main
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  issues: read
+  statuses: write
+
+jobs:
+  disposition:
+    name: AI Review Disposition Worker
+    # PR-associated events generate additional native job Checks. Only trusted
+    # default-branch background events are supported by the single-row caller.
+    if: >-
+      ${{ contains(fromJSON('["schedule","workflow_dispatch","workflow_run","issue_comment","issues"]'), github.event_name)
+          && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # All entry points share one writer queue. Scheduled sweeps revisit every PR
+    # when GitHub coalesces pending duplicate events.
+    concurrency:
+      group: ai-review-disposition-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AI_REVIEW_BOTS: ${{ inputs.bot-logins }}
+    steps:
+    - name: Checkout trusted shared scripts
+      uses: actions/checkout@v4
+      with:
+        repository: IS-Model-Framework/.github
+        ref: ${{ inputs.shared-ref }}
+        path: .ci-shared
+        persist-credentials: false
+        sparse-checkout: scripts
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.11'
+
+    - name: Route, validate and publish the single disposition status
+      env:
+        AI_REVIEW_CHECKS_FILE: ${{ runner.temp }}/ai-review-statuses.jsonl
+        PR_NUMBER: ${{ inputs.pr-number }}
+        ALL_OPEN_PRS: ${{ inputs.all-open-prs }}
+        RECOVER_RUN_ID: ${{ inputs.recover-run-id }}
+        ONLY_CHANGED: ${{ inputs.only-changed }}
+      run: |
+        args=(--background)
+        if [[ "$ONLY_CHANGED" == "true" ]]; then
+          args+=(--only-changed)
+        fi
+        if [[ "$RECOVER_RUN_ID" != "0" ]]; then
+          args+=(--recover-run "$RECOVER_RUN_ID")
+        elif [[ "$ALL_OPEN_PRS" == "true" ]]; then
+          args+=(--all-open-prs)
+        else
+          args+=(--pr-number "$PR_NUMBER")
+        fi
+        python .ci-shared/scripts/check_ai_review_disposition.py "${args[@]}"
+
+    - name: Fail interrupted pending statuses before releasing the writer slot
+      if: ${{ always() && hashFiles('.ci-shared/scripts/check_ai_review_disposition.py') != '' }}
+      env:
+        AI_REVIEW_CHECKS_FILE: ${{ runner.temp }}/ai-review-statuses.jsonl
+      run: python3 .ci-shared/scripts/check_ai_review_disposition.py --cleanup-file "$AI_REVIEW_CHECKS_FILE"

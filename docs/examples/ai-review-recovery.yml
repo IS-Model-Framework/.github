@@ -1,0 +1,27 @@
+# Copy to each project's .github/workflows/ai-review-recovery.yml.
+# Uses only default-branch shared code and live API state, never source-run artifacts.
+name: AI Review Disposition Recovery
+
+on:
+  workflow_run:
+    workflows: [AI Review Disposition]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  issues: read
+  statuses: write
+
+jobs:
+  recover:
+    if: >-
+      ${{ contains(fromJSON('["failure","cancelled","timed_out","action_required","startup_failure"]'),
+                   github.event.workflow_run.conclusion) }}
+    uses: IS-Model-Framework/.github/.github/workflows/reusable-ai-review-disposition.yml@main
+    with:
+      recover-run-id: ${{ github.event.workflow_run.id }}
+      only-changed: true
+      bot-logins: ${{ vars.AI_REVIEW_BOTS }}
+      shared-ref: main
