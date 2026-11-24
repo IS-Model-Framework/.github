@@ -44,20 +44,20 @@ def main():
     if path.endswith(".py") and path.split("/", 1)[0] in included
   )
 
-  rows = []
-  if files:
-    cov = Coverage()
-    cov.load()
-    if not Path(cov.get_data().data_filename()).is_file():
-      raise RuntimeError("Coverage data file is missing")
+  if not files:
+    return 0
 
-    for path in files:
-      _, statements, _, missing, _ = cov.analysis2(path)
-      total = len(statements)
-      rows.append((path, total - len(missing), total))
+  cov = Coverage()
+  cov.load()
+  if not Path(cov.get_data().data_filename()).is_file():
+    raise RuntimeError("Coverage data file is missing")
 
   failed = False
-  for path, covered, total in rows:
+  for path in files:
+    _, statements, _, missing, _ = cov.analysis2(path)
+    total = len(statements)
+    covered = total - len(missing)
+
     if total and covered * 100 < args.threshold * total:
       print(
         f"{path}: {covered * 100 / total:.2f}% ({covered}/{total}), "
