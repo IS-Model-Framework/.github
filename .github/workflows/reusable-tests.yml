@@ -29,7 +29,7 @@ on:
         type: boolean
         default: true
       file-coverage-threshold:
-        description: 'Minimum line coverage for each added source file'
+        description: 'Minimum line coverage for each changed source file'
         required: false
         type: number
         default: 85
@@ -140,7 +140,7 @@ jobs:
         file: ./coverage.xml
         fail_ci_if_error: false
 
-    - name: Check added-file coverage
+    - name: Check changed-file coverage
       if: ${{ env.CHECK_NEW_FILE_COVERAGE == 'true' }}
       env:
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}

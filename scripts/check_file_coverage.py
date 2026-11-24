@@ -30,7 +30,7 @@ def main():
     "git",
     "diff",
     "--name-only",
-    "--diff-filter=A",
+    "--diff-filter=AMR",
     "--find-renames",
     "-z",
     f"{base}...{head}",
